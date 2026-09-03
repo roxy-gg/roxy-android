@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Computer
 import androidx.compose.material.icons.rounded.ExpandMore
@@ -43,6 +44,7 @@ fun ComputerSelector(
     onExpandedChange: (Boolean) -> Unit,
     onComputerSelected: (String) -> Unit,
     modifier: Modifier = Modifier,
+    onAddNewComputer: () -> Unit = {},
 ) {
     val colors = MaterialTheme.roxyColors
 
@@ -162,6 +164,30 @@ fun ComputerSelector(
                     HorizontalDivider(color = colors.border)
                 }
             }
+
+            HorizontalDivider(color = colors.border)
+
+            DropdownMenuItem(
+                text = {
+                    Text(
+                        text = "Add new computer",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = colors.text,
+                    )
+                },
+                onClick = {
+                    onAddNewComputer()
+                    onExpandedChange(false)
+                },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Rounded.Add,
+                        contentDescription = "Add new computer",
+                        tint = colors.textMuted,
+                    )
+                },
+                contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding,
+            )
         }
     }
 }
