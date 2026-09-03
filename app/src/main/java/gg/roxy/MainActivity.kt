@@ -30,6 +30,11 @@ class MainActivity : ComponentActivity() {
                     onComposerChange = viewModel::updateComposer,
                     onComposerSubmit = viewModel::submitComposer,
                     onToolCallClick = viewModel::toggleToolCall,
+                    onAddNewComputer = viewModel::showConnectDialog,
+                    onDismissConnectDialog = viewModel::dismissConnectDialog,
+                    onConnectComputer = viewModel::connectRemote,
+                    initialToken = viewModel.getInitialToken(),
+                    initialPin = viewModel.getInitialPin(),
                 )
             }
         }

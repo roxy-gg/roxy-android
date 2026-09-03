@@ -32,4 +32,7 @@ data class MainFullScreenUiState(
     val computers: List<ComputerUiModel>,
     val projects: List<ProjectUiModel>,
     val isComputerMenuExpanded: Boolean = false,
+    val isConnectingDialogVisible: Boolean = false,
+    val isConnecting: Boolean = false,
+    val connectionError: String? = null,
 )

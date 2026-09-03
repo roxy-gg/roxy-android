@@ -83,6 +83,11 @@ fun MainFullScreen(
     onComputerSelected: (String) -> Unit,
     onSessionSelected: (String) -> Unit,
     modifier: Modifier = Modifier,
+    onAddNewComputer: () -> Unit = {},
+    onDismissConnectDialog: () -> Unit = {},
+    onConnectComputer: (String, String) -> Unit = { _, _ -> },
+    initialToken: String = "",
+    initialPin: String = "",
 ) {
     val colors = MaterialTheme.roxyColors
     var isSettingsOpen by rememberSaveable { mutableStateOf(false) }
@@ -95,6 +100,17 @@ fun MainFullScreen(
             ProjectSortOrder.Alphabetical -> uiState.projects.sortedBy { it.name.lowercase() }
             ProjectSortOrder.Sessions -> uiState.projects.sortedByDescending { it.sessions.size }
         }
+    }
+
+    if (uiState.isConnectingDialogVisible) {
+        ConnectComputerDialog(
+            isConnecting = uiState.isConnecting,
+            errorMessage = uiState.connectionError,
+            onDismiss = onDismissConnectDialog,
+            onConnect = onConnectComputer,
+            initialTokenOrUrl = initialToken,
+            initialPin = initialPin,
+        )
     }
 
     Box(
@@ -111,6 +127,11 @@ fun MainFullScreen(
         ) { showSettings ->
             if (showSettings) {
                 SettingsSkeletonView(
+                    selectedComputer = uiState.selectedComputer,
+                    onConnectClick = {
+                        isSettingsOpen = false
+                        onAddNewComputer()
+                    },
                     onBackClick = { isSettingsOpen = false },
                     modifier = Modifier
                         .widthIn(max = 720.dp)
@@ -198,6 +219,7 @@ fun MainFullScreen(
                                 expanded = uiState.isComputerMenuExpanded,
                                 onExpandedChange = onComputerMenuExpandedChange,
                                 onComputerSelected = onComputerSelected,
+                                onAddNewComputer = onAddNewComputer,
                                 modifier = Modifier.fillMaxWidth(),
                             )
                         }
@@ -292,10 +314,16 @@ fun MainFullScreen(
     }
 }
 
-private data class SettingsItemUi(val title: String, val subtitle: String)
+private data class SettingsItemUi(
+    val title: String,
+    val subtitle: String,
+    val onClick: () -> Unit = {},
+)
 
 @Composable
 private fun SettingsSkeletonView(
+    selectedComputer: ComputerUiModel,
+    onConnectClick: () -> Unit,
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -364,8 +392,12 @@ private fun SettingsSkeletonView(
             SettingsCategorySection(
                 title = "Connection",
                 items = listOf(
-                    SettingsItemUi("Remote Workspaces", "1 connected"),
-                    SettingsItemUi("Bridge Port", "5555"),
+                    SettingsItemUi(
+                        title = "Remote Workspaces",
+                        subtitle = if (selectedComputer.isConnected) "Connected: ${selectedComputer.name}" else "Disconnected (Tap to connect)",
+                        onClick = onConnectClick,
+                    ),
+                    SettingsItemUi("Relay Service", "roxy.gg/api/remote"),
                 ),
             )
         }
@@ -375,7 +407,10 @@ private fun SettingsSkeletonView(
                 title = "About",
                 items = listOf(
                     SettingsItemUi("Roxy Android", "v0.1.0 • Technical Preview"),
-                    SettingsItemUi("Desktop Sync", "Connected to Computer #1"),
+                    SettingsItemUi(
+                        title = "Desktop Sync",
+                        subtitle = if (selectedComputer.isConnected) selectedComputer.name else "Not paired",
+                    ),
                 ),
             )
         }
@@ -408,7 +443,7 @@ private fun SettingsCategorySection(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable {}
+                            .clickable(onClick = item.onClick)
                             .padding(horizontal = 16.dp, vertical = 14.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -465,7 +500,6 @@ fun ActivityHeatmapCard(modifier: Modifier = Modifier) {
                     .padding(horizontal = 16.dp, vertical = 18.dp)
                     .fillMaxWidth(),
             ) {
-                // Day labels pinned on the left
                 Column(
                     modifier = Modifier.padding(top = 22.dp, end = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(3.dp),
@@ -490,13 +524,11 @@ fun ActivityHeatmapCard(modifier: Modifier = Modifier) {
                     }
                 }
 
-                // Horizontally scrollable heatmap grid
                 Column(
                     modifier = Modifier
                         .weight(1f)
                         .horizontalScroll(scrollState),
                 ) {
-                    // Months header
                     Row(
                         modifier = Modifier.padding(bottom = 8.dp),
                         horizontalArrangement = Arrangement.spacedBy(23.dp),
@@ -517,7 +549,6 @@ fun ActivityHeatmapCard(modifier: Modifier = Modifier) {
                         }
                     }
 
-                    // 7 rows of activity cells
                     val numCols = 46
                     val activeCells = remember { generateActivityGrid(numCols) }
 
@@ -527,11 +558,11 @@ fun ActivityHeatmapCard(modifier: Modifier = Modifier) {
                                 for (col in 0 until numCols) {
                                     val level = activeCells[col][row]
                                     val cellColor = when (level) {
-                                        4 -> Color(0xFF67E8F9) // Glowing electric cyan
-                                        3 -> Color(0xFF38BDF8) // Bright cyan
-                                        2 -> Color(0xFF0284C7) // Mid cyan
-                                        1 -> Color(0xFF0369A1) // Dark cyan
-                                        else -> Color(0xFF18181D) // Empty charcoal
+                                        4 -> Color(0xFF67E8F9)
+                                        3 -> Color(0xFF38BDF8)
+                                        2 -> Color(0xFF0284C7)
+                                        1 -> Color(0xFF0369A1)
+                                        else -> Color(0xFF18181D)
                                     }
                                     Box(
                                         modifier = Modifier
@@ -552,12 +583,10 @@ private fun generateActivityGrid(numCols: Int): List<List<Int>> {
     val grid = MutableList(numCols) { MutableList(7) { 0 } }
 
     if (numCols > 38) {
-        // Under 'jul' (week 38):
         grid[38][2] = 2; grid[38][3] = 3; grid[38][4] = 2; grid[38][6] = 3
     }
 
     if (numCols > 45) {
-        // Under 'ago' (weeks 41..45):
         grid[41][0] = 3; grid[41][1] = 2; grid[41][2] = 4; grid[41][3] = 2; grid[41][4] = 3; grid[41][5] = 3; grid[41][6] = 2
         grid[42][0] = 2; grid[42][1] = 2; grid[42][2] = 3; grid[42][3] = 4; grid[42][4] = 2; grid[42][5] = 3
         grid[43][0] = 4; grid[43][1] = 2; grid[43][2] = 3; grid[43][3] = 2; grid[43][4] = 3; grid[43][5] = 2; grid[43][6] = 2

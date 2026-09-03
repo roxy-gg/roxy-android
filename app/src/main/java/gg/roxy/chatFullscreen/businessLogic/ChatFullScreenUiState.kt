@@ -6,6 +6,7 @@ import androidx.compose.runtime.Immutable
 data class ChatMessageUiModel(
     val id: String,
     val text: String,
+    val isUser: Boolean = false,
 )
 
 enum class ToolCallType {
@@ -36,4 +37,5 @@ data class ChatFullScreenUiState(
     val messages: List<ChatMessageUiModel>,
     val toolCalls: List<ToolCallUiModel>,
     val composerText: String = "",
+    val isRunning: Boolean = false,
 )

@@ -1,6 +1,7 @@
 package gg.roxy.chatFullscreen.components
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Folder
@@ -24,6 +26,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -62,6 +65,7 @@ fun ChatFullScreen(
         ChatHeader(
             sessionTitle = uiState.sessionTitle,
             projectName = uiState.projectName,
+            isRunning = uiState.isRunning,
             onBackClick = onBackClick,
         )
         HorizontalDivider(color = colors.border)
@@ -76,24 +80,49 @@ fun ChatFullScreen(
         ) {
             uiState.messages.forEach { message ->
                 item(key = message.id) {
-                    Text(
-                        text = message.text,
+                    if (message.isUser) {
+                        Box(
+                            modifier = Modifier
+                                .widthIn(max = 720.dp)
+                                .fillMaxWidth(),
+                            contentAlignment = Alignment.CenterEnd,
+                        ) {
+                            Surface(
+                                shape = MaterialTheme.shapes.large,
+                                color = colors.surface2,
+                                border = BorderStroke(1.dp, colors.edge),
+                            ) {
+                                Text(
+                                    text = message.text,
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = colors.text,
+                                )
+                            }
+                        }
+                    } else {
+                        Text(
+                            text = message.text,
+                            modifier = Modifier
+                                .widthIn(max = 720.dp)
+                                .fillMaxWidth(),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = colors.text,
+                        )
+                    }
+                }
+            }
+
+            if (uiState.toolCalls.isNotEmpty()) {
+                item(key = "tool-calls") {
+                    ToolCallStack(
+                        toolCalls = uiState.toolCalls,
+                        onToolCallClick = onToolCallClick,
                         modifier = Modifier
                             .widthIn(max = 720.dp)
                             .fillMaxWidth(),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = colors.text,
                     )
                 }
-            }
-            item(key = "tool-calls") {
-                ToolCallStack(
-                    toolCalls = uiState.toolCalls,
-                    onToolCallClick = onToolCallClick,
-                    modifier = Modifier
-                        .widthIn(max = 720.dp)
-                        .fillMaxWidth(),
-                )
             }
         }
 
@@ -118,6 +147,7 @@ fun ChatFullScreen(
 fun ChatHeader(
     sessionTitle: String,
     projectName: String,
+    isRunning: Boolean = false,
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -163,11 +193,26 @@ fun ChatHeader(
                 )
             }
         }
-        Text(
-            text = "Roxy",
-            style = MaterialTheme.typography.labelMedium,
-            color = colors.textSubtle,
-        )
+        if (isRunning) {
+            Surface(
+                modifier = Modifier.size(8.dp),
+                shape = CircleShape,
+                color = colors.accent,
+                content = {},
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "Thinking...",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.accent,
+            )
+        } else {
+            Text(
+                text = "Roxy",
+                style = MaterialTheme.typography.labelMedium,
+                color = colors.textSubtle,
+            )
+        }
     }
 }
 
@@ -201,10 +246,10 @@ private fun ChatFullScreenDarkPreview() {
     RoxyTheme(darkTheme = true) {
         ChatFullScreen(
             uiState = ChatPreviewState,
-            onBackClick = {},
-            onComposerChange = {},
-            onComposerSubmit = {},
-            onToolCallClick = {},
+            onBackClick = { },
+            onComposerChange = { },
+            onComposerSubmit = { },
+            onToolCallClick = { },
         )
     }
 }
@@ -215,10 +260,10 @@ private fun ChatFullScreenLightPreview() {
     RoxyTheme(darkTheme = false) {
         ChatFullScreen(
             uiState = ChatPreviewState,
-            onBackClick = {},
-            onComposerChange = {},
-            onComposerSubmit = {},
-            onToolCallClick = {},
+            onBackClick = { },
+            onComposerChange = { },
+            onComposerSubmit = { },
+            onToolCallClick = { },
         )
     }
 }

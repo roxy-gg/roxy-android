@@ -16,6 +16,11 @@ fun RoxyApp(
     onComposerSubmit: () -> Unit,
     onToolCallClick: (String) -> Unit,
     modifier: Modifier = Modifier,
+    onAddNewComputer: () -> Unit = {},
+    onDismissConnectDialog: () -> Unit = {},
+    onConnectComputer: (String, String) -> Unit = { _, _ -> },
+    initialToken: String = "",
+    initialPin: String = "",
 ) {
     when (uiState.destination) {
         RoxyDestination.Main -> MainFullScreen(
@@ -23,6 +28,11 @@ fun RoxyApp(
             onComputerMenuExpandedChange = onComputerMenuExpandedChange,
             onComputerSelected = onComputerSelected,
             onSessionSelected = onSessionSelected,
+            onAddNewComputer = onAddNewComputer,
+            onDismissConnectDialog = onDismissConnectDialog,
+            onConnectComputer = onConnectComputer,
+            initialToken = initialToken,
+            initialPin = initialPin,
             modifier = modifier,
         )
 
