@@ -10,9 +10,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.res.painterResource
-import gg.roxy.R
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,9 +24,7 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -39,7 +34,6 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Computer
 import androidx.compose.material.icons.rounded.FilterList
 import androidx.compose.material.icons.rounded.Folder
-import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -61,11 +55,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import gg.roxy.R
 import gg.roxy.mainFullScreen.businessLogic.ComputerUiModel
 import gg.roxy.mainFullScreen.businessLogic.MainFullScreenUiState
 import gg.roxy.mainFullScreen.businessLogic.ProjectUiModel
@@ -91,6 +87,7 @@ fun MainFullScreen(
     onScanQrCode: () -> Unit = {},
     onDismissConnectDialog: () -> Unit = {},
     onConnectComputer: (String, String) -> Unit = { _, _ -> },
+    onDisconnectComputer: () -> Unit = {},
     initialToken: String = "",
     initialPin: String = "",
 ) {
@@ -133,7 +130,7 @@ fun MainFullScreen(
             transitionSpec = { fadeIn() togetherWith fadeOut() },
         ) { showSettings ->
             if (showSettings) {
-                SettingsSkeletonView(
+                SettingsView(
                     selectedComputer = uiState.selectedComputer,
                     onConnectClick = {
                         isSettingsOpen = false
@@ -142,6 +139,9 @@ fun MainFullScreen(
                     onScanQrClick = {
                         isSettingsOpen = false
                         onScanQrCode()
+                    },
+                    onDisconnectClick = {
+                        onDisconnectComputer()
                     },
                     onBackClick = { isSettingsOpen = false },
                     modifier = Modifier
@@ -156,7 +156,7 @@ fun MainFullScreen(
                     contentPadding = PaddingValues(start = 20.dp, top = 20.dp, end = 20.dp, bottom = 36.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
-                    // 1. Header (Brand + Status badge + Settings)
+                    // 1. Header (Brand + Settings)
                     item {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -185,7 +185,7 @@ fun MainFullScreen(
                                     )
                                     Spacer(Modifier.height(2.dp))
                                     Text(
-                                        text = "Pick up a session from any connected computer.",
+                                        text = "Remote Workspace",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = colors.textMuted,
                                     )
@@ -425,14 +425,16 @@ private fun EmptyProjectsState(
 private data class SettingsItemUi(
     val title: String,
     val subtitle: String,
+    val isDestructive: Boolean = false,
     val onClick: () -> Unit = {},
 )
 
 @Composable
-private fun SettingsSkeletonView(
+private fun SettingsView(
     selectedComputer: ComputerUiModel,
     onConnectClick: () -> Unit,
     onScanQrClick: () -> Unit = {},
+    onDisconnectClick: () -> Unit = {},
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -457,62 +459,51 @@ private fun SettingsSkeletonView(
                     )
                 }
                 Spacer(Modifier.width(4.dp))
-                Column {
-                    Text(
-                        text = "Settings",
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = colors.text,
-                    )
-                    Spacer(Modifier.height(3.dp))
-                    Text(
-                        text = "App preferences and configurations",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = colors.textMuted,
-                    )
-                }
+                Text(
+                    text = "Settings",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = colors.text,
+                )
             }
         }
 
         item {
-            ActivityHeatmapCard(modifier = Modifier.fillMaxWidth())
-        }
-
-        item {
-            SettingsCategorySection(
-                title = "General",
-                items = listOf(
-                    SettingsItemUi("Language", "Español / English"),
-                ),
-            )
-        }
-
-        item {
-            SettingsCategorySection(
-                title = "Roxy AI Engine",
-                items = listOf(
-                    SettingsItemUi("Default Model", "gemini-3.8-flash-high"),
-                    SettingsItemUi("Reasoning Effort", "High"),
-                    SettingsItemUi("Max Context", "128k tokens"),
-                ),
-            )
-        }
-
-        item {
-            SettingsCategorySection(
-                title = "Connection",
-                items = listOf(
+            val connectionItems = buildList {
+                add(
                     SettingsItemUi(
                         title = "Scan Desktop QR",
                         subtitle = "Pair quickly by scanning PC screen",
                         onClick = onScanQrClick,
-                    ),
+                    )
+                )
+                add(
                     SettingsItemUi(
-                        title = "Remote Workspaces",
+                        title = "Remote Workspace",
                         subtitle = if (selectedComputer.isConnected) "Connected: ${selectedComputer.name}" else "Disconnected (Tap to enter PIN/link)",
                         onClick = onConnectClick,
-                    ),
-                    SettingsItemUi("Relay Service", "roxy.gg/api/remote"),
-                ),
+                    )
+                )
+                add(
+                    SettingsItemUi(
+                        title = "Relay Service",
+                        subtitle = "roxy.gg/api/remote",
+                    )
+                )
+                if (selectedComputer.isConnected) {
+                    add(
+                        SettingsItemUi(
+                            title = "Disconnect PC",
+                            subtitle = "Disconnect from ${selectedComputer.name}",
+                            isDestructive = true,
+                            onClick = onDisconnectClick,
+                        )
+                    )
+                }
+            }
+
+            SettingsCategorySection(
+                title = "Connection",
+                items = connectionItems,
             )
         }
 
@@ -520,10 +511,10 @@ private fun SettingsSkeletonView(
             SettingsCategorySection(
                 title = "About",
                 items = listOf(
-                    SettingsItemUi("Roxy Android", "v0.1.0 • Technical Preview"),
+                    SettingsItemUi("Roxy Android", "v0.1.0"),
                     SettingsItemUi(
                         title = "Desktop Sync",
-                        subtitle = if (selectedComputer.isConnected) selectedComputer.name else "Not paired",
+                        subtitle = if (selectedComputer.isConnected) "${selectedComputer.name} • Connected" else "Not paired",
                     ),
                 ),
             )
@@ -565,7 +556,7 @@ private fun SettingsCategorySection(
                             Text(
                                 text = item.title,
                                 style = MaterialTheme.typography.titleSmall,
-                                color = colors.text,
+                                color = if (item.isDestructive) colors.accent else colors.text,
                             )
                             Spacer(Modifier.height(2.dp))
                             Text(
@@ -587,151 +578,10 @@ private fun SettingsCategorySection(
     }
 }
 
-@Composable
-fun ActivityHeatmapCard(modifier: Modifier = Modifier) {
-    val colors = MaterialTheme.roxyColors
-    val scrollState = rememberScrollState(initial = Int.MAX_VALUE)
-
-    Column(modifier = modifier) {
-        Text(
-            text = "ACTIVITY",
-            style = MaterialTheme.typography.labelSmall.copy(
-                fontFamily = RoxyMonoFontFamily,
-                letterSpacing = 1.5.sp,
-                fontWeight = FontWeight.SemiBold,
-            ),
-            color = colors.textMuted,
-            modifier = Modifier.padding(start = 4.dp, bottom = 8.dp),
-        )
-
-        Surface(
-            shape = MaterialTheme.shapes.large,
-            color = colors.surface,
-            border = BorderStroke(1.dp, colors.edge),
-        ) {
-            Row(
-                modifier = Modifier
-                    .padding(horizontal = 16.dp, vertical = 18.dp)
-                    .fillMaxWidth(),
-            ) {
-                Column(
-                    modifier = Modifier.padding(top = 22.dp, end = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(3.dp),
-                ) {
-                    val days = listOf("", "Mon", "", "Wed", "", "Fri", "")
-                    days.forEach { day ->
-                        Box(
-                            modifier = Modifier.size(width = 24.dp, height = 10.dp),
-                            contentAlignment = Alignment.CenterEnd,
-                        ) {
-                            if (day.isNotEmpty()) {
-                                Text(
-                                    text = day,
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontFamily = RoxyMonoFontFamily,
-                                        fontSize = 9.sp,
-                                    ),
-                                    color = colors.textSubtle,
-                                )
-                            }
-                        }
-                    }
-                }
-
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .horizontalScroll(scrollState),
-                ) {
-                    Row(
-                        modifier = Modifier.padding(bottom = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(23.dp),
-                    ) {
-                        val months = listOf(
-                            "sep", "oct", "nov", "dic", "ene", "feb",
-                            "mar", "abr", "may", "jun", "jul", "ago"
-                        )
-                        months.forEach { month ->
-                            Text(
-                                text = month,
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontFamily = RoxyMonoFontFamily,
-                                    fontSize = 9.5.sp,
-                                ),
-                                color = colors.textSubtle,
-                            )
-                        }
-                    }
-
-                    val numCols = 46
-                    val activeCells = remember { generateActivityGrid(numCols) }
-
-                    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                        for (row in 0 until 7) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                                for (col in 0 until numCols) {
-                                    val level = activeCells[col][row]
-                                    val cellColor = when (level) {
-                                        4 -> Color(0xFF67E8F9)
-                                        3 -> Color(0xFF38BDF8)
-                                        2 -> Color(0xFF0284C7)
-                                        1 -> Color(0xFF0369A1)
-                                        else -> Color(0xFF18181D)
-                                    }
-                                    Box(
-                                        modifier = Modifier
-                                            .size(10.dp)
-                                            .background(cellColor, RoundedCornerShape(2.dp)),
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-private fun generateActivityGrid(numCols: Int): List<List<Int>> {
-    val grid = MutableList(numCols) { MutableList(7) { 0 } }
-
-    if (numCols > 38) {
-        grid[38][2] = 2; grid[38][3] = 3; grid[38][4] = 2; grid[38][6] = 3
-    }
-
-    if (numCols > 45) {
-        grid[41][0] = 3; grid[41][1] = 2; grid[41][2] = 4; grid[41][3] = 2; grid[41][4] = 3; grid[41][5] = 3; grid[41][6] = 2
-        grid[42][0] = 2; grid[42][1] = 2; grid[42][2] = 3; grid[42][3] = 4; grid[42][4] = 2; grid[42][5] = 3
-        grid[43][0] = 4; grid[43][1] = 2; grid[43][2] = 3; grid[43][3] = 2; grid[43][4] = 3; grid[43][5] = 2; grid[43][6] = 2
-        grid[44][1] = 2; grid[44][2] = 3; grid[44][3] = 2; grid[44][4] = 2; grid[44][6] = 3
-        grid[45][0] = 3; grid[45][1] = 4; grid[45][2] = 0; grid[45][3] = 3; grid[45][4] = 2; grid[45][6] = 3
-    }
-
-    return grid
-}
-
 private val MainPreviewState = MainFullScreenUiState(
-    selectedComputer = ComputerUiModel("computer-1", "Computer #1", "Connected", true),
-    computers = listOf(ComputerUiModel("computer-1", "Computer #1", "Connected", true)),
-    projects = listOf(
-        ProjectUiModel(
-            id = "project-1",
-            name = "Project #1",
-            sessions = listOf(
-                SessionUiModel("session-1", "Session #1", "Building the Android client", "Now", true),
-                SessionUiModel("session-2", "Session #2", "Desktop theme parity", "18m"),
-                SessionUiModel("session-3", "Session #3", "Compose architecture", "Yesterday"),
-            ),
-        ),
-        ProjectUiModel(
-            id = "project-2",
-            name = "Project #2",
-            sessions = listOf(
-                SessionUiModel("session-4", "Session #1", "Remote workspace", "Mon"),
-            ),
-        ),
-    ),
+    selectedComputer = ComputerUiModel("pc-remote", "Desktop PC", "Connected", true),
+    computers = listOf(ComputerUiModel("pc-remote", "Desktop PC", "Connected", true)),
+    projects = emptyList(),
 )
 
 @Preview(name = "Main - Dark", showBackground = true, backgroundColor = 0xFF0A0A0A)

@@ -217,27 +217,10 @@ fun ChatHeader(
 }
 
 private val ChatPreviewState = ChatFullScreenUiState(
-    sessionTitle = "Session #1",
-    projectName = "Project #1",
-    messages = listOf(ChatMessageUiModel("message-1", "Hi dummy text")),
-    toolCalls = listOf(
-        ToolCallUiModel(
-            id = "tool-1",
-            type = ToolCallType.File,
-            name = "read",
-            title = "shared/theme.ts",
-            detail = "Read the desktop theme token definitions.",
-            status = ToolCallStatus.Complete,
-        ),
-        ToolCallUiModel(
-            id = "tool-2",
-            type = ToolCallType.Terminal,
-            name = "bash",
-            title = "./gradlew assembleDebug",
-            detail = "Build completed successfully.",
-            status = ToolCallStatus.Complete,
-        ),
-    ),
+    sessionTitle = "Remote Session",
+    projectName = "roxy-android",
+    messages = emptyList(),
+    toolCalls = emptyList(),
 )
 
 @Preview(name = "Chat - Dark", showBackground = true, backgroundColor = 0xFF0A0A0A)

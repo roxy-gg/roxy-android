@@ -41,6 +41,7 @@ class MainActivity : ComponentActivity() {
                     onScanQrCode = ::startQrScanner,
                     onDismissConnectDialog = viewModel::dismissConnectDialog,
                     onConnectComputer = viewModel::connectRemote,
+                    onDisconnectComputer = viewModel::disconnectRemote,
                     initialToken = viewModel.getInitialToken(),
                     initialPin = viewModel.getInitialPin(),
                 )

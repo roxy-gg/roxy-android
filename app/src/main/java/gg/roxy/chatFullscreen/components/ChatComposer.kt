@@ -154,7 +154,7 @@ fun ChatComposer(
             ) {
                 // Attach button (+)
                 Surface(
-                    onClick = { /* Skeleton: attach */ },
+                    onClick = { /* Attach image or file */ },
                     shape = CircleShape,
                     color = colors.elevated,
                     border = BorderStroke(1.dp, colors.edge),

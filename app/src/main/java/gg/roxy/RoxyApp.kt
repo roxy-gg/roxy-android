@@ -20,6 +20,7 @@ fun RoxyApp(
     onScanQrCode: () -> Unit = {},
     onDismissConnectDialog: () -> Unit = {},
     onConnectComputer: (String, String) -> Unit = { _, _ -> },
+    onDisconnectComputer: () -> Unit = {},
     initialToken: String = "",
     initialPin: String = "",
 ) {
@@ -33,6 +34,7 @@ fun RoxyApp(
             onScanQrCode = onScanQrCode,
             onDismissConnectDialog = onDismissConnectDialog,
             onConnectComputer = onConnectComputer,
+            onDisconnectComputer = onDisconnectComputer,
             initialToken = initialToken,
             initialPin = initialPin,
             modifier = modifier,
