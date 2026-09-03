@@ -17,7 +17,6 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Computer
 import androidx.compose.material.icons.rounded.ExpandMore
-import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -46,7 +45,6 @@ fun ComputerSelector(
     onComputerSelected: (String) -> Unit,
     modifier: Modifier = Modifier,
     onAddNewComputer: () -> Unit = {},
-    onScanQrCode: () -> Unit = {},
 ) {
     val colors = MaterialTheme.roxyColors
 
@@ -172,31 +170,7 @@ fun ComputerSelector(
             DropdownMenuItem(
                 text = {
                     Text(
-                        text = "Scan QR Code",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = colors.text,
-                    )
-                },
-                onClick = {
-                    onScanQrCode()
-                    onExpandedChange(false)
-                },
-                leadingIcon = {
-                    Icon(
-                        imageVector = Icons.Rounded.QrCodeScanner,
-                        contentDescription = "Scan QR Code",
-                        tint = colors.accent,
-                    )
-                },
-                contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding,
-            )
-
-            HorizontalDivider(color = colors.border)
-
-            DropdownMenuItem(
-                text = {
-                    Text(
-                        text = "Enter manually",
+                        text = "Add new computer",
                         style = MaterialTheme.typography.titleSmall,
                         color = colors.text,
                     )
@@ -208,7 +182,7 @@ fun ComputerSelector(
                 leadingIcon = {
                     Icon(
                         imageVector = Icons.Rounded.Add,
-                        contentDescription = "Enter manually",
+                        contentDescription = "Add new computer",
                         tint = colors.textMuted,
                     )
                 },

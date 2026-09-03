@@ -227,7 +227,6 @@ fun MainFullScreen(
                                 onExpandedChange = onComputerMenuExpandedChange,
                                 onComputerSelected = onComputerSelected,
                                 onAddNewComputer = onAddNewComputer,
-                                onScanQrCode = onScanQrCode,
                                 modifier = Modifier.fillMaxWidth(),
                             )
                         }
