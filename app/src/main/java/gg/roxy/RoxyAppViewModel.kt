@@ -101,6 +101,7 @@ class RoxyAppViewModel(
                                     isConnecting = false,
                                     isConnectingDialogVisible = false,
                                     connectionError = null,
+                                    qrFeedbackMessage = null,
                                 )
                             )
                         }
@@ -279,13 +280,18 @@ class RoxyAppViewModel(
         }
     }
 
-    fun showConnectDialog() {
+    fun showConnectDialog(prefilledToken: String? = null, prefilledPin: String? = null) {
+        val token = prefilledToken ?: storage.savedToken ?: ""
+        val pin = prefilledPin ?: storage.savedPin ?: ""
         _uiState.update { state ->
             state.copy(
                 main = state.main.copy(
                     isConnectingDialogVisible = true,
                     isComputerMenuExpanded = false,
                     connectionError = null,
+                    prefilledToken = token,
+                    prefilledPin = pin,
+                    qrFeedbackMessage = null,
                 )
             )
         }
@@ -297,6 +303,60 @@ class RoxyAppViewModel(
                 main = state.main.copy(
                     isConnectingDialogVisible = false,
                     connectionError = null,
+                    qrFeedbackMessage = null,
+                )
+            )
+        }
+    }
+
+    fun onQrCodeScanned(scannedText: String) {
+        val parsed = RemoteWorkspaceUtils.parseQrPairing(scannedText)
+        if (parsed == null || parsed.token.isBlank()) {
+            _uiState.update { state ->
+                state.copy(
+                    main = state.main.copy(
+                        isConnectingDialogVisible = true,
+                        connectionError = "Invalid QR code: no Roxy connection token found.",
+                        qrFeedbackMessage = null,
+                    )
+                )
+            }
+            return
+        }
+
+        if (parsed.pin?.length == 6) {
+            _uiState.update { state ->
+                state.copy(
+                    main = state.main.copy(
+                        isConnectingDialogVisible = true,
+                        prefilledToken = parsed.token,
+                        prefilledPin = parsed.pin,
+                        qrFeedbackMessage = "QR paired! Connecting to desktop...",
+                        connectionError = null,
+                    )
+                )
+            }
+            connectRemote(parsed.token, parsed.pin)
+        } else {
+            _uiState.update { state ->
+                state.copy(
+                    main = state.main.copy(
+                        isConnectingDialogVisible = true,
+                        prefilledToken = parsed.token,
+                        prefilledPin = "",
+                        qrFeedbackMessage = "QR code scanned! Enter the 6-digit PIN shown on your PC.",
+                        connectionError = null,
+                    )
+                )
+            }
+        }
+    }
+
+    fun onScanError(errorMessage: String) {
+        _uiState.update { state ->
+            state.copy(
+                main = state.main.copy(
+                    connectionError = "QR Scanner error: $errorMessage"
                 )
             )
         }

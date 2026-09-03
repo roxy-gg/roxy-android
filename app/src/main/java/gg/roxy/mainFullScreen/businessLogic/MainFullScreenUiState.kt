@@ -35,4 +35,7 @@ data class MainFullScreenUiState(
     val isConnectingDialogVisible: Boolean = false,
     val isConnecting: Boolean = false,
     val connectionError: String? = null,
+    val prefilledToken: String = "",
+    val prefilledPin: String = "",
+    val qrFeedbackMessage: String? = null,
 )

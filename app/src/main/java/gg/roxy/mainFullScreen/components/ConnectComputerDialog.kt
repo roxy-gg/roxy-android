@@ -1,7 +1,6 @@
 package gg.roxy.mainFullScreen.components
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,12 +15,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Computer
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -52,27 +54,30 @@ fun ConnectComputerDialog(
     errorMessage: String?,
     onDismiss: () -> Unit,
     onConnect: (tokenOrUrl: String, pin: String) -> Unit,
+    modifier: Modifier = Modifier,
+    onScanQrCode: () -> Unit = {},
+    qrFeedbackMessage: String? = null,
     initialTokenOrUrl: String = "",
     initialPin: String = "",
 ) {
     val colors = MaterialTheme.roxyColors
-    var tokenInput by remember { mutableStateOf(initialTokenOrUrl) }
-    var pinInput by remember { mutableStateOf(initialPin) }
+    var tokenInput by remember(initialTokenOrUrl) { mutableStateOf(initialTokenOrUrl) }
+    var pinInput by remember(initialPin) { mutableStateOf(initialPin) }
     val keyboardController = LocalSoftwareKeyboardController.current
 
     val canConnect = tokenInput.isNotBlank() && pinInput.trim().length == 6 && !isConnecting
 
     Dialog(onDismissRequest = { if (!isConnecting) onDismiss() }) {
         Surface(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = modifier.fillMaxWidth(),
             shape = RoundedCornerShape(20.dp),
             color = colors.elevated,
             border = BorderStroke(1.dp, colors.edgeStrong),
             shadowElevation = 12.dp,
         ) {
             Column(
-                modifier = Modifier.padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                modifier = Modifier.padding(22.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 // Header
                 Row(
@@ -109,14 +114,82 @@ fun ConnectComputerDialog(
                     }
                 }
 
-                Text(
-                    text = "In Roxy on your computer, click 'Remote Workspace' in the sidebar to get your link and PIN.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = colors.textMuted,
-                )
+                // QR Scan Shortcut Button
+                Button(
+                    onClick = onScanQrCode,
+                    enabled = !isConnecting,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = colors.surface2,
+                        contentColor = colors.text,
+                    ),
+                    border = BorderStroke(1.dp, colors.edgeStrong),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.QrCodeScanner,
+                        contentDescription = "Scan QR Code",
+                        tint = colors.accent,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        text = "Scan QR Code from PC",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+
+                // QR Feedback banner if scanned
+                if (qrFeedbackMessage != null) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = colors.surface2,
+                        border = BorderStroke(1.dp, colors.success),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.CheckCircle,
+                                contentDescription = null,
+                                tint = colors.success,
+                                modifier = Modifier.size(16.dp),
+                            )
+                            Text(
+                                text = qrFeedbackMessage,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = colors.text,
+                            )
+                        }
+                    }
+                }
+
+                // Divider: OR ENTER MANUALLY
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    HorizontalDivider(modifier = Modifier.weight(1f), color = colors.border)
+                    Text(
+                        text = "OR ENTER MANUALLY",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = RoxyMonoFontFamily,
+                            letterSpacing = 1.1.sp,
+                            fontSize = 9.5.sp,
+                            fontWeight = FontWeight.Medium,
+                        ),
+                        color = colors.textSubtle,
+                    )
+                    HorizontalDivider(modifier = Modifier.weight(1f), color = colors.border)
+                }
 
                 // Input: Link / Token
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     Text(
                         text = "LINK OR TOKEN",
                         style = MaterialTheme.typography.labelSmall.copy(
@@ -132,7 +205,7 @@ fun ConnectComputerDialog(
                         modifier = Modifier.fillMaxWidth(),
                         placeholder = {
                             Text(
-                                "Paste https://roxy.gg/r/... or token",
+                                "Paste https://roxy.gg/remote#... or token",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = colors.textSubtle,
                             )
@@ -160,7 +233,7 @@ fun ConnectComputerDialog(
                 }
 
                 // Input: PIN
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     Text(
                         text = "6-DIGIT PIN",
                         style = MaterialTheme.typography.labelSmall.copy(
@@ -229,7 +302,7 @@ fun ConnectComputerDialog(
                     }
                 }
 
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(2.dp))
 
                 // Actions
                 Row(

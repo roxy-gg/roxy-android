@@ -194,6 +194,35 @@ class RoxyAppViewModelTest {
         assertEquals("Checking logs now... All clear!", viewModel.uiState.value.chat.messages[1].text)
     }
 
+    @Test
+    fun qrCodeScannedWithPinAutomaticallyConnects() {
+        val client = FakeRemoteWorkspaceClient()
+        val viewModel = createViewModel(client = client)
+
+        val qrContent = "https://roxy.gg/remote#k=test_jwt_guest_token&pin=654321"
+        viewModel.onQrCodeScanned(qrContent)
+
+        assertEquals("test_jwt_guest_token", viewModel.uiState.value.main.prefilledToken)
+        assertEquals("654321", viewModel.uiState.value.main.prefilledPin)
+        assertFalse(viewModel.uiState.value.main.isConnectingDialogVisible)
+        assertEquals("Connected", viewModel.uiState.value.main.selectedComputer.status)
+        assertTrue(viewModel.uiState.value.main.selectedComputer.isConnected)
+    }
+
+    @Test
+    fun qrCodeScannedWithoutPinPrefillsTokenAndAsksForPin() {
+        val client = FakeRemoteWorkspaceClient()
+        val viewModel = createViewModel(client = client)
+
+        val qrContent = "https://roxy.gg/remote#k=token_without_pin"
+        viewModel.onQrCodeScanned(qrContent)
+
+        assertEquals("token_without_pin", viewModel.uiState.value.main.prefilledToken)
+        assertEquals("", viewModel.uiState.value.main.prefilledPin)
+        assertTrue(viewModel.uiState.value.main.isConnectingDialogVisible)
+        assertEquals("QR code scanned! Enter the 6-digit PIN shown on your PC.", viewModel.uiState.value.main.qrFeedbackMessage)
+    }
+
     private fun RoxyAppViewModel.toolCall(id: String): ToolCallUiModel =
         uiState.value.chat.toolCalls.first { it.id == id }
 }

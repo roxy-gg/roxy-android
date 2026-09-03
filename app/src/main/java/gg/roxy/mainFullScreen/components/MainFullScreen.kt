@@ -84,6 +84,7 @@ fun MainFullScreen(
     onSessionSelected: (String) -> Unit,
     modifier: Modifier = Modifier,
     onAddNewComputer: () -> Unit = {},
+    onScanQrCode: () -> Unit = {},
     onDismissConnectDialog: () -> Unit = {},
     onConnectComputer: (String, String) -> Unit = { _, _ -> },
     initialToken: String = "",
@@ -108,8 +109,10 @@ fun MainFullScreen(
             errorMessage = uiState.connectionError,
             onDismiss = onDismissConnectDialog,
             onConnect = onConnectComputer,
-            initialTokenOrUrl = initialToken,
-            initialPin = initialPin,
+            onScanQrCode = onScanQrCode,
+            qrFeedbackMessage = uiState.qrFeedbackMessage,
+            initialTokenOrUrl = if (uiState.prefilledToken.isNotBlank()) uiState.prefilledToken else initialToken,
+            initialPin = if (uiState.prefilledPin.isNotBlank()) uiState.prefilledPin else initialPin,
         )
     }
 
@@ -131,6 +134,10 @@ fun MainFullScreen(
                     onConnectClick = {
                         isSettingsOpen = false
                         onAddNewComputer()
+                    },
+                    onScanQrClick = {
+                        isSettingsOpen = false
+                        onScanQrCode()
                     },
                     onBackClick = { isSettingsOpen = false },
                     modifier = Modifier
@@ -220,6 +227,7 @@ fun MainFullScreen(
                                 onExpandedChange = onComputerMenuExpandedChange,
                                 onComputerSelected = onComputerSelected,
                                 onAddNewComputer = onAddNewComputer,
+                                onScanQrCode = onScanQrCode,
                                 modifier = Modifier.fillMaxWidth(),
                             )
                         }
@@ -324,6 +332,7 @@ private data class SettingsItemUi(
 private fun SettingsSkeletonView(
     selectedComputer: ComputerUiModel,
     onConnectClick: () -> Unit,
+    onScanQrClick: () -> Unit = {},
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -393,8 +402,13 @@ private fun SettingsSkeletonView(
                 title = "Connection",
                 items = listOf(
                     SettingsItemUi(
+                        title = "Scan Desktop QR",
+                        subtitle = "Pair quickly by scanning PC screen",
+                        onClick = onScanQrClick,
+                    ),
+                    SettingsItemUi(
                         title = "Remote Workspaces",
-                        subtitle = if (selectedComputer.isConnected) "Connected: ${selectedComputer.name}" else "Disconnected (Tap to connect)",
+                        subtitle = if (selectedComputer.isConnected) "Connected: ${selectedComputer.name}" else "Disconnected (Tap to enter PIN/link)",
                         onClick = onConnectClick,
                     ),
                     SettingsItemUi("Relay Service", "roxy.gg/api/remote"),
