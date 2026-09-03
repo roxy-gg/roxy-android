@@ -34,11 +34,15 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Computer
 import androidx.compose.material.icons.rounded.FilterList
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -306,15 +310,112 @@ fun MainFullScreen(
                         }
                     }
 
-                    sortedProjects.forEach { project ->
-                        item(key = project.id) {
-                            ProjectSection(
-                                project = project,
-                                onSessionSelected = onSessionSelected,
-                                modifier = Modifier.fillMaxWidth(),
+                    if (sortedProjects.isEmpty()) {
+                        item {
+                            EmptyProjectsState(
+                                isConnected = uiState.selectedComputer.isConnected,
+                                onConnectClick = onAddNewComputer,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 12.dp),
                             )
                         }
+                    } else {
+                        sortedProjects.forEach { project ->
+                            item(key = project.id) {
+                                ProjectSection(
+                                    project = project,
+                                    onSessionSelected = onSessionSelected,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+                        }
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmptyProjectsState(
+    isConnected: Boolean,
+    onConnectClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = MaterialTheme.roxyColors
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = colors.surface2,
+        border = BorderStroke(1.dp, colors.edge),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Surface(
+                modifier = Modifier.size(44.dp),
+                shape = CircleShape,
+                color = colors.elevated,
+                border = BorderStroke(1.dp, colors.edgeStrong),
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = if (isConnected) Icons.Rounded.Folder else Icons.Rounded.Computer,
+                        contentDescription = null,
+                        tint = if (isConnected) colors.textMuted else colors.accent,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+            }
+
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = if (isConnected) "No active sessions" else "No computer connected",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = colors.text,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                )
+                Text(
+                    text = if (isConnected) {
+                        "Open a project or run a session in Roxy Desktop to see it here."
+                    } else {
+                        "Connect your PC to sync projects and control your sessions remotely."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.textMuted,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                )
+            }
+
+            if (!isConnected) {
+                Spacer(Modifier.height(4.dp))
+                Button(
+                    onClick = onConnectClick,
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = colors.accent,
+                        contentColor = colors.bg,
+                    ),
+                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Add,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = "Connect PC",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
                 }
             }
         }

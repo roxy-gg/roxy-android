@@ -165,7 +165,9 @@ fun ComputerSelector(
                 }
             }
 
-            HorizontalDivider(color = colors.border)
+            if (computers.isNotEmpty()) {
+                HorizontalDivider(color = colors.border)
+            }
 
             DropdownMenuItem(
                 text = {

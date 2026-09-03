@@ -67,26 +67,47 @@ class RoxyAppViewModelTest {
     ) = RoxyAppViewModel(client, storage, CoroutineScope(Dispatchers.Unconfined))
 
     @Test
+    fun initialStateHasNoDemoComputerOrSessions() {
+        val viewModel = createViewModel()
+        assertFalse(viewModel.uiState.value.main.selectedComputer.isConnected)
+        assertEquals("No computer connected", viewModel.uiState.value.main.selectedComputer.name)
+        assertTrue(viewModel.uiState.value.main.computers.isEmpty())
+        assertTrue(viewModel.uiState.value.main.projects.isEmpty())
+        assertTrue(viewModel.uiState.value.chat.messages.isEmpty())
+        assertTrue(viewModel.uiState.value.chat.toolCalls.isEmpty())
+    }
+
+    @Test
     fun sessionSelectionAndBackNavigationUpdateTheRootState() {
         val client = FakeRemoteWorkspaceClient()
         val viewModel = createViewModel(client = client)
 
-        viewModel.openSession("project-2-session-1")
+        client.fakeEvents.tryEmit(
+            RemoteEvent.SessionsReceived(
+                sessions = listOf(
+                    RemoteSessionInfo("sess-1", "Session #1", "Project #1"),
+                    RemoteSessionInfo("sess-2", "Session #2", "Project #2"),
+                ),
+                currentId = "sess-1"
+            )
+        )
 
-        assertEquals("project-2-session-1", client.lastSwitchedSession)
+        viewModel.openSession("sess-2")
+
+        assertEquals("sess-2", client.lastSwitchedSession)
         assertEquals(RoxyDestination.Chat, viewModel.uiState.value.destination)
         assertEquals("Project #2", viewModel.uiState.value.chat.projectName)
-        assertEquals("Session #1", viewModel.uiState.value.chat.sessionTitle)
+        assertEquals("Session #2", viewModel.uiState.value.chat.sessionTitle)
         assertTrue(
             viewModel.uiState.value.main.projects
                 .flatMap { it.sessions }
-                .first { it.id == "project-2-session-1" }
+                .first { it.id == "sess-2" }
                 .isActive,
         )
         assertFalse(
             viewModel.uiState.value.main.projects
                 .flatMap { it.sessions }
-                .first { it.id == "project-1-session-1" }
+                .first { it.id == "sess-1" }
                 .isActive,
         )
 
@@ -99,6 +120,16 @@ class RoxyAppViewModelTest {
     fun composerAndToolCallsAreControlledByTheViewModel() {
         val client = FakeRemoteWorkspaceClient()
         val viewModel = createViewModel(client = client)
+
+        client.fakeEvents.tryEmit(
+            RemoteEvent.ToolStarted(
+                sessionId = "sess-1",
+                callId = "tool-1",
+                tool = "read",
+                title = "shared/theme.ts"
+            )
+        )
+
         val toolCall = viewModel.uiState.value.chat.toolCalls.first()
 
         viewModel.updateComposer("Port the theme")
@@ -115,13 +146,14 @@ class RoxyAppViewModelTest {
 
     @Test
     fun computerSelectionClosesTheControlledMenu() {
-        val viewModel = createViewModel()
-        val computerId = viewModel.uiState.value.main.selectedComputer.id
+        val client = FakeRemoteWorkspaceClient()
+        val viewModel = createViewModel(client = client)
+        client.connect("tok", "123456")
 
         viewModel.setComputerMenuExpanded(true)
         assertTrue(viewModel.uiState.value.main.isComputerMenuExpanded)
 
-        viewModel.selectComputer(computerId)
+        viewModel.selectComputer("pc-remote")
         assertFalse(viewModel.uiState.value.main.isComputerMenuExpanded)
     }
 

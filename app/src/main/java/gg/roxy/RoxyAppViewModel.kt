@@ -118,14 +118,25 @@ class RoxyAppViewModel(
                             )
                         }
                         is RemoteConnectionState.Disconnected -> {
+                            val emptyPc = ComputerUiModel(
+                                id = "none",
+                                name = "No computer connected",
+                                status = "Disconnected",
+                                isConnected = false,
+                            )
                             state.copy(
                                 main = state.main.copy(
                                     isConnecting = false,
-                                    selectedComputer = state.main.selectedComputer.copy(
-                                        status = "Disconnected",
-                                        isConnected = false,
-                                    ),
-                                )
+                                    selectedComputer = emptyPc,
+                                    computers = emptyList(),
+                                    projects = emptyList(),
+                                ),
+                                chat = state.chat.copy(
+                                    sessionTitle = "",
+                                    projectName = "",
+                                    messages = emptyList(),
+                                    toolCalls = emptyList(),
+                                ),
                             )
                         }
                     }
@@ -369,6 +380,29 @@ class RoxyAppViewModel(
     fun disconnectRemote() {
         storage.clear()
         remoteClient.disconnect()
+        _uiState.update { state ->
+            val emptyPc = ComputerUiModel(
+                id = "none",
+                name = "No computer connected",
+                status = "Disconnected",
+                isConnected = false,
+            )
+            state.copy(
+                main = state.main.copy(
+                    selectedComputer = emptyPc,
+                    computers = emptyList(),
+                    projects = emptyList(),
+                    isConnecting = false,
+                    connectionError = null,
+                ),
+                chat = state.chat.copy(
+                    sessionTitle = "",
+                    projectName = "",
+                    messages = emptyList(),
+                    toolCalls = emptyList(),
+                ),
+            )
+        }
     }
 
     fun setComputerMenuExpanded(expanded: Boolean) {
@@ -478,9 +512,9 @@ class RoxyAppViewModel(
 
 private fun initialUiState(): RoxyAppUiState {
     val computer = ComputerUiModel(
-        id = "computer-1",
-        name = "Computer #1",
-        status = "Disconnected (Tap to connect)",
+        id = "none",
+        name = "No computer connected",
+        status = "Disconnected",
         isConnected = false,
     )
 
@@ -488,81 +522,14 @@ private fun initialUiState(): RoxyAppUiState {
         destination = RoxyDestination.Main,
         main = MainFullScreenUiState(
             selectedComputer = computer,
-            computers = listOf(computer),
-            projects = listOf(
-                ProjectUiModel(
-                    id = "project-1",
-                    name = "Project #1",
-                    sessions = listOf(
-                        SessionUiModel(
-                            id = "project-1-session-1",
-                            title = "Session #1",
-                            summary = "Connect your PC to sync sessions",
-                            updatedAt = "Now",
-                            isActive = true,
-                        ),
-                        SessionUiModel(
-                            id = "project-1-session-2",
-                            title = "Session #2",
-                            summary = "Desktop theme parity",
-                            updatedAt = "18m",
-                        ),
-                        SessionUiModel(
-                            id = "project-1-session-3",
-                            title = "Session #3",
-                            summary = "Compose architecture",
-                            updatedAt = "Yesterday",
-                        ),
-                    ),
-                ),
-                ProjectUiModel(
-                    id = "project-2",
-                    name = "Project #2",
-                    sessions = listOf(
-                        SessionUiModel(
-                            id = "project-2-session-1",
-                            title = "Session #1",
-                            summary = "Remote workspace",
-                            updatedAt = "Mon",
-                        ),
-                    ),
-                ),
-                ProjectUiModel(
-                    id = "project-3",
-                    name = "Project #3",
-                    sessions = listOf(
-                        SessionUiModel(
-                            id = "project-3-session-1",
-                            title = "Session #1",
-                            summary = "Initial setup",
-                            updatedAt = "Aug 28",
-                        ),
-                    ),
-                ),
-            ),
+            computers = emptyList(),
+            projects = emptyList(),
         ),
         chat = ChatFullScreenUiState(
-            sessionTitle = "Session #1",
-            projectName = "Project #1",
-            messages = listOf(ChatMessageUiModel(id = "message-1", text = "Hi dummy text")),
-            toolCalls = listOf(
-                ToolCallUiModel(
-                    id = "tool-call-1",
-                    type = ToolCallType.File,
-                    name = "read",
-                    title = "shared/theme.ts",
-                    detail = "Read the desktop theme token definitions.",
-                    status = ToolCallStatus.Complete,
-                ),
-                ToolCallUiModel(
-                    id = "tool-call-2",
-                    type = ToolCallType.Terminal,
-                    name = "bash",
-                    title = "./gradlew assembleDebug",
-                    detail = "Build completed successfully.",
-                    status = ToolCallStatus.Complete,
-                ),
-            ),
+            sessionTitle = "",
+            projectName = "",
+            messages = emptyList(),
+            toolCalls = emptyList(),
         ),
     )
 }
