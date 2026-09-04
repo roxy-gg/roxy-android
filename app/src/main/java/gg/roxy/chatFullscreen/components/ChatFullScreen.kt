@@ -38,6 +38,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import gg.roxy.chatFullscreen.businessLogic.ChatFullScreenUiState
 import gg.roxy.chatFullscreen.businessLogic.ChatMessageUiModel
+import gg.roxy.chatFullscreen.businessLogic.ChatPartUiModel
 import gg.roxy.chatFullscreen.businessLogic.ToolCallStatus
 import gg.roxy.chatFullscreen.businessLogic.ToolCallType
 import gg.roxy.chatFullscreen.businessLogic.ToolCallUiModel
@@ -122,8 +123,8 @@ fun ChatFullScreen(
                 }
             } else {
                 uiState.messages.forEach { message ->
-                    item(key = message.id) {
-                        if (message.isUser) {
+                    if (message.isUser) {
+                        item(key = message.id) {
                             Box(
                                 modifier = Modifier
                                     .widthIn(max = 720.dp)
@@ -143,23 +144,65 @@ fun ChatFullScreen(
                                     )
                                 }
                             }
-                        } else {
-                            Text(
-                                text = message.text,
-                                modifier = Modifier
-                                    .widthIn(max = 720.dp)
-                                    .fillMaxWidth(),
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = colors.text,
-                            )
+                        }
+                    } else {
+                        // Assistant message: walk parts in chronological order, exactly like desktop
+                        if (message.parts.isNotEmpty()) {
+                            message.parts.forEach { part ->
+                                when (part) {
+                                    is ChatPartUiModel.Text -> {
+                                        item(key = part.id) {
+                                            MarkdownText(
+                                                markdown = part.text,
+                                                modifier = Modifier
+                                                    .widthIn(max = 720.dp)
+                                                    .fillMaxWidth(),
+                                            )
+                                        }
+                                    }
+                                    is ChatPartUiModel.Reasoning -> {
+                                        item(key = part.id) {
+                                            ReasoningCard(
+                                                reasoning = part,
+                                                modifier = Modifier
+                                                    .widthIn(max = 720.dp)
+                                                    .fillMaxWidth(),
+                                            )
+                                        }
+                                    }
+                                    is ChatPartUiModel.Tool -> {
+                                        item(key = part.id) {
+                                            ToolCallCard(
+                                                toolCall = part.tool,
+                                                onClick = { onToolCallClick(part.tool.id) },
+                                                modifier = Modifier
+                                                    .widthIn(max = 720.dp)
+                                                    .fillMaxWidth(),
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        } else if (message.text.isNotBlank()) {
+                            item(key = message.id) {
+                                MarkdownText(
+                                    markdown = message.text,
+                                    modifier = Modifier
+                                        .widthIn(max = 720.dp)
+                                        .fillMaxWidth(),
+                                )
+                            }
                         }
                     }
                 }
 
-                if (uiState.toolCalls.isNotEmpty()) {
-                    item(key = "tool-calls") {
+                // Fallback for tools not associated with an existing message part
+                val inPartsToolIds = uiState.messages.flatMap { it.parts }.filterIsInstance<ChatPartUiModel.Tool>().map { it.tool.id }.toSet()
+                val orphanTools = uiState.toolCalls.filterNot { it.id in inPartsToolIds }
+                if (orphanTools.isNotEmpty()) {
+                    item(key = "orphan-tool-calls") {
                         ToolCallStack(
-                            toolCalls = uiState.toolCalls,
+                            toolCalls = orphanTools,
                             onToolCallClick = onToolCallClick,
                             modifier = Modifier
                                 .widthIn(max = 720.dp)

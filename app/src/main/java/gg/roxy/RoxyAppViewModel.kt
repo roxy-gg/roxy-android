@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import gg.roxy.chatFullscreen.businessLogic.ChatFullScreenUiState
 import gg.roxy.chatFullscreen.businessLogic.ChatMessageUiModel
+import gg.roxy.chatFullscreen.businessLogic.ChatPartUiModel
 import gg.roxy.chatFullscreen.businessLogic.ToolCallStatus
 import gg.roxy.chatFullscreen.businessLogic.ToolCallType
 import gg.roxy.chatFullscreen.businessLogic.ToolCallUiModel
@@ -173,9 +174,14 @@ class RoxyAppViewModel(
             }
             is RemoteEvent.SnapshotReceived -> {
                 val current = sessionCache[event.sessionId] ?: SessionChatCache()
+                val allTools = if (event.tools.isNotEmpty()) {
+                    event.tools
+                } else {
+                    event.messages.flatMap { m -> m.parts.filterIsInstance<ChatPartUiModel.Tool>().map { it.tool } }
+                }
                 sessionCache[event.sessionId] = current.copy(
                     messages = event.messages,
-                    toolCalls = event.tools,
+                    toolCalls = allTools,
                 )
 
                 if (activeSessionId == null || activeSessionId == event.sessionId) {
@@ -186,7 +192,7 @@ class RoxyAppViewModel(
                         state.copy(
                             chat = state.chat.copy(
                                 messages = event.messages,
-                                toolCalls = event.tools,
+                                toolCalls = allTools,
                                 isSyncing = false,
                             )
                         )
@@ -202,11 +208,22 @@ class RoxyAppViewModel(
                             id = UUID.randomUUID().toString(),
                             text = event.chunk,
                             isUser = false,
+                            parts = listOf(ChatPartUiModel.Text(id = UUID.randomUUID().toString(), text = event.chunk)),
                         )
                     )
                 } else {
                     val last = cachedMessages.last()
-                    cachedMessages[cachedMessages.lastIndex] = last.copy(text = last.text + event.chunk)
+                    val parts = last.parts.toMutableList()
+                    val lastPart = parts.lastOrNull()
+                    if (lastPart is ChatPartUiModel.Text) {
+                        parts[parts.lastIndex] = lastPart.copy(text = lastPart.text + event.chunk)
+                    } else {
+                        parts.add(ChatPartUiModel.Text(id = UUID.randomUUID().toString(), text = event.chunk))
+                    }
+                    cachedMessages[cachedMessages.lastIndex] = last.copy(
+                        text = last.text + event.chunk,
+                        parts = parts,
+                    )
                 }
                 sessionCache[event.sessionId] = current.copy(messages = cachedMessages)
 
@@ -232,12 +249,35 @@ class RoxyAppViewModel(
                     isExpanded = false,
                 )
                 val current = sessionCache[event.sessionId] ?: SessionChatCache()
+                val cachedMessages = current.messages.toMutableList()
+                if (cachedMessages.isEmpty() || cachedMessages.last().isUser) {
+                    cachedMessages.add(
+                        ChatMessageUiModel(
+                            id = UUID.randomUUID().toString(),
+                            isUser = false,
+                            parts = listOf(ChatPartUiModel.Tool(tool)),
+                        )
+                    )
+                } else {
+                    val last = cachedMessages.last()
+                    cachedMessages[cachedMessages.lastIndex] = last.copy(
+                        parts = last.parts + ChatPartUiModel.Tool(tool)
+                    )
+                }
                 val updatedTools = current.toolCalls + tool
-                sessionCache[event.sessionId] = current.copy(toolCalls = updatedTools)
+                sessionCache[event.sessionId] = current.copy(
+                    messages = cachedMessages,
+                    toolCalls = updatedTools,
+                )
 
                 if (activeSessionId == null || activeSessionId == event.sessionId) {
                     _uiState.update { state ->
-                        state.copy(chat = state.chat.copy(toolCalls = updatedTools))
+                        state.copy(
+                            chat = state.chat.copy(
+                                messages = cachedMessages,
+                                toolCalls = updatedTools,
+                            )
+                        )
                     }
                 }
             }
@@ -250,11 +290,30 @@ class RoxyAppViewModel(
                         tool
                     }
                 }
-                sessionCache[event.sessionId] = current.copy(toolCalls = updatedTools)
+                val cachedMessages = current.messages.map { msg ->
+                    if (msg.isUser) msg
+                    else {
+                        val updatedParts = msg.parts.map { part ->
+                            if (part is ChatPartUiModel.Tool && part.tool.id == event.callId) {
+                                part.copy(tool = part.tool.copy(detail = part.tool.detail + event.chunk))
+                            } else part
+                        }
+                        msg.copy(parts = updatedParts)
+                    }
+                }
+                sessionCache[event.sessionId] = current.copy(
+                    messages = cachedMessages,
+                    toolCalls = updatedTools,
+                )
 
                 if (activeSessionId == null || activeSessionId == event.sessionId) {
                     _uiState.update { state ->
-                        state.copy(chat = state.chat.copy(toolCalls = updatedTools))
+                        state.copy(
+                            chat = state.chat.copy(
+                                messages = cachedMessages,
+                                toolCalls = updatedTools,
+                            )
+                        )
                     }
                 }
             }
@@ -270,31 +329,79 @@ class RoxyAppViewModel(
                         tool
                     }
                 }
-                sessionCache[event.sessionId] = current.copy(toolCalls = updatedTools)
+                val cachedMessages = current.messages.map { msg ->
+                    if (msg.isUser) msg
+                    else {
+                        val updatedParts = msg.parts.map { part ->
+                            if (part is ChatPartUiModel.Tool && part.tool.id == event.callId) {
+                                part.copy(
+                                    tool = part.tool.copy(
+                                        status = ToolCallStatus.Complete,
+                                        detail = if (event.output.isNotBlank()) event.output else part.tool.detail,
+                                    )
+                                )
+                            } else part
+                        }
+                        msg.copy(parts = updatedParts)
+                    }
+                }
+                sessionCache[event.sessionId] = current.copy(
+                    messages = cachedMessages,
+                    toolCalls = updatedTools,
+                )
 
                 if (activeSessionId == null || activeSessionId == event.sessionId) {
                     _uiState.update { state ->
-                        state.copy(chat = state.chat.copy(toolCalls = updatedTools))
+                        state.copy(
+                            chat = state.chat.copy(
+                                messages = cachedMessages,
+                                toolCalls = updatedTools,
+                            )
+                        )
                     }
                 }
             }
             is RemoteEvent.TurnChanged -> {
                 val current = sessionCache[event.sessionId] ?: SessionChatCache()
-                var currentMessages = current.messages
+                val currentMessages = current.messages.toMutableList()
                 if (event.userText != null && (currentMessages.isEmpty() || currentMessages.last().text != event.userText)) {
-                    currentMessages = currentMessages + ChatMessageUiModel(
-                        id = UUID.randomUUID().toString(),
-                        text = event.userText,
-                        isUser = true,
+                    currentMessages.add(
+                        ChatMessageUiModel(
+                            id = UUID.randomUUID().toString(),
+                            text = event.userText,
+                            isUser = true,
+                        )
                     )
                 }
-                if (event.inFlightText != null && (currentMessages.isEmpty() || currentMessages.last().isUser)) {
-                    currentMessages = currentMessages + ChatMessageUiModel(
-                        id = UUID.randomUUID().toString(),
-                        text = event.inFlightText,
-                        isUser = false,
-                    )
+
+                if (event.inFlightTools.isNotEmpty() || event.inFlightText != null) {
+                    val inFlightParts = mutableListOf<ChatPartUiModel>()
+                    event.inFlightTools.forEach { tool ->
+                        inFlightParts.add(ChatPartUiModel.Tool(tool))
+                    }
+                    if (event.inFlightText != null) {
+                        inFlightParts.add(
+                            ChatPartUiModel.Text(
+                                id = UUID.randomUUID().toString(),
+                                text = event.inFlightText,
+                            )
+                        )
+                    }
+
+                    if (currentMessages.isEmpty() || currentMessages.last().isUser) {
+                        currentMessages.add(
+                            ChatMessageUiModel(
+                                id = UUID.randomUUID().toString(),
+                                isUser = false,
+                                parts = inFlightParts,
+                            )
+                        )
+                    } else {
+                        val last = currentMessages.last()
+                        currentMessages[currentMessages.lastIndex] = last.copy(parts = inFlightParts)
+                    }
                 }
+
                 val currentTools = if (event.inFlightTools.isNotEmpty()) {
                     val existingIds = current.toolCalls.map { it.id }.toSet()
                     current.toolCalls + event.inFlightTools.filterNot { it.id in existingIds }
@@ -575,16 +682,42 @@ class RoxyAppViewModel(
         if (activeId != null) {
             val cached = sessionCache[activeId]
             if (cached != null) {
-                val updated = cached.toolCalls.map { tool ->
+                val updatedTools = cached.toolCalls.map { tool ->
                     if (tool.id == toolCallId) tool.copy(isExpanded = !tool.isExpanded) else tool
                 }
-                sessionCache[activeId] = cached.copy(toolCalls = updated)
+                val updatedMessages = cached.messages.map { msg ->
+                    if (msg.isUser) msg
+                    else {
+                        val updatedParts = msg.parts.map { part ->
+                            if (part is ChatPartUiModel.Tool && part.tool.id == toolCallId) {
+                                part.copy(tool = part.tool.copy(isExpanded = !part.tool.isExpanded))
+                            } else part
+                        }
+                        msg.copy(parts = updatedParts)
+                    }
+                }
+                sessionCache[activeId] = cached.copy(
+                    messages = updatedMessages,
+                    toolCalls = updatedTools,
+                )
             }
         }
 
         _uiState.update { state ->
+            val updatedMessages = state.chat.messages.map { msg ->
+                if (msg.isUser) msg
+                else {
+                    val updatedParts = msg.parts.map { part ->
+                        if (part is ChatPartUiModel.Tool && part.tool.id == toolCallId) {
+                            part.copy(tool = part.tool.copy(isExpanded = !part.tool.isExpanded))
+                        } else part
+                    }
+                    msg.copy(parts = updatedParts)
+                }
+            }
             state.copy(
                 chat = state.chat.copy(
+                    messages = updatedMessages,
                     toolCalls = state.chat.toolCalls.map { toolCall ->
                         if (toolCall.id == toolCallId) {
                             toolCall.copy(isExpanded = !toolCall.isExpanded)

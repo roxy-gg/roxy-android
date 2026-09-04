@@ -131,8 +131,8 @@ class RemoteWorkspaceClientTest {
         job.cancel()
 
         assertEquals("session-tools-only", event.sessionId)
-        // No empty text messages should be created
-        assertTrue(event.messages.isEmpty())
+        assertEquals(1, event.messages.size)
+        assertEquals(1, event.messages[0].parts.size)
 
         assertEquals(1, event.tools.size)
         val tool = event.tools[0]

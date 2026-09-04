@@ -1,6 +1,7 @@
 package gg.roxy.remote
 
 import gg.roxy.chatFullscreen.businessLogic.ChatMessageUiModel
+import gg.roxy.chatFullscreen.businessLogic.ChatPartUiModel
 import gg.roxy.chatFullscreen.businessLogic.ToolCallStatus
 import gg.roxy.chatFullscreen.businessLogic.ToolCallType
 import gg.roxy.chatFullscreen.businessLogic.ToolCallUiModel
@@ -172,30 +173,48 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
                     val content = mObj.optString("content", "")
                     val partsArray = mObj.optJSONArray("parts")
 
-                    var textAccumulator = ""
-                    if (partsArray != null && partsArray.length() > 0) {
+                    if (isUser) {
+                        if (content.isNotBlank()) {
+                            messagesList.add(
+                                ChatMessageUiModel(
+                                    id = id,
+                                    text = content,
+                                    isUser = true,
+                                    parts = emptyList(),
+                                )
+                            )
+                        }
+                    } else {
+                        val partsList = mutableListOf<ChatPartUiModel>()
                         val textParts = mutableListOf<String>()
-                        for (p in 0 until partsArray.length()) {
-                            val partObj = partsArray.optJSONObject(p) ?: continue
-                            when (partObj.optString("type")) {
-                                "text" -> {
-                                    val partText = partObj.optString("text", "")
-                                    if (partText.isNotBlank()) textParts.add(partText)
-                                }
-                                "reasoning" -> {
-                                    val reasoningText = partObj.optString("text", "")
-                                    if (reasoningText.isNotBlank()) textParts.add(reasoningText)
-                                }
-                                "tool" -> {
-                                    val toolName = partObj.optString("tool", "tool")
-                                    val toolTitle = partObj.optString("title", toolName)
-                                    val toolState = partObj.optString("state", "done")
-                                    val toolOutput = partObj.optString("output", "")
-                                    val callId = partObj.optString("callId", UUID.randomUUID().toString())
-                                    val toolType = resolveToolType(toolName)
 
-                                    toolsList.add(
-                                        ToolCallUiModel(
+                        if (partsArray != null && partsArray.length() > 0) {
+                            for (p in 0 until partsArray.length()) {
+                                val partObj = partsArray.optJSONObject(p) ?: continue
+                                when (partObj.optString("type")) {
+                                    "text" -> {
+                                        val partText = partObj.optString("text", "")
+                                        if (partText.isNotBlank()) {
+                                            partsList.add(ChatPartUiModel.Text(id = "$id-text-$p", text = partText))
+                                            textParts.add(partText)
+                                        }
+                                    }
+                                    "reasoning" -> {
+                                        val reasoningText = partObj.optString("text", "")
+                                        if (reasoningText.isNotBlank()) {
+                                            partsList.add(ChatPartUiModel.Reasoning(id = "$id-reasoning-$p", text = reasoningText))
+                                            textParts.add(reasoningText)
+                                        }
+                                    }
+                                    "tool" -> {
+                                        val toolName = partObj.optString("tool", "tool")
+                                        val toolTitle = partObj.optString("title", toolName)
+                                        val toolState = partObj.optString("state", "done")
+                                        val toolOutput = partObj.optString("output", "")
+                                        val callId = partObj.optString("callId", UUID.randomUUID().toString())
+                                        val toolType = resolveToolType(toolName)
+
+                                        val toolModel = ToolCallUiModel(
                                             id = callId,
                                             type = toolType,
                                             name = toolName,
@@ -204,25 +223,28 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
                                             status = if (toolState == "running") ToolCallStatus.Running else ToolCallStatus.Complete,
                                             isExpanded = false,
                                         )
-                                    )
+                                        partsList.add(ChatPartUiModel.Tool(toolModel))
+                                        toolsList.add(toolModel)
+                                    }
                                 }
                             }
                         }
-                        if (textParts.isNotEmpty()) {
-                            textAccumulator = textParts.joinToString("\n\n")
-                        }
-                    } else {
-                        textAccumulator = content
-                    }
 
-                    if (textAccumulator.isNotBlank()) {
-                        messagesList.add(
-                            ChatMessageUiModel(
-                                id = id,
-                                text = textAccumulator,
-                                isUser = isUser,
+                        val fullText = if (textParts.isNotEmpty()) textParts.joinToString("\n\n") else content
+                        if (partsList.isEmpty() && fullText.isNotBlank()) {
+                            partsList.add(ChatPartUiModel.Text(id = "$id-content", text = fullText))
+                        }
+
+                        if (partsList.isNotEmpty() || fullText.isNotBlank()) {
+                            messagesList.add(
+                                ChatMessageUiModel(
+                                    id = id,
+                                    text = fullText,
+                                    isUser = false,
+                                    parts = partsList,
+                                )
                             )
-                        )
+                        }
                     }
                 }
 
