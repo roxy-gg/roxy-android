@@ -255,6 +255,157 @@ class RoxyAppViewModelTest {
         assertEquals("QR code scanned! Enter the 6-digit PIN shown on your PC.", viewModel.uiState.value.main.qrFeedbackMessage)
     }
 
+    @Test
+    fun navigatingBackAndReopeningPreservesMessagesAndToolsFromRamCache() {
+        val client = FakeRemoteWorkspaceClient()
+        val viewModel = createViewModel(client = client)
+
+        client.fakeEvents.tryEmit(
+            RemoteEvent.SessionsReceived(
+                sessions = listOf(
+                    RemoteSessionInfo("sess-1", "Session #1", "Project #1"),
+                ),
+                currentId = "sess-1"
+            )
+        )
+
+        viewModel.openSession("sess-1")
+
+        // Populate with snapshot
+        client.fakeEvents.tryEmit(
+            RemoteEvent.SnapshotReceived(
+                sessionId = "sess-1",
+                messages = listOf(
+                    ChatMessageUiModel(id = "msg-1", text = "Hello Roxy", isUser = true),
+                    ChatMessageUiModel(id = "msg-2", text = "Hello! How can I help?", isUser = false),
+                ),
+                tools = listOf(
+                    ToolCallUiModel(
+                        id = "tool-1",
+                        type = ToolCallType.File,
+                        name = "read",
+                        title = "README.md",
+                        detail = "Content",
+                        status = ToolCallStatus.Complete,
+                    )
+                )
+            )
+        )
+
+        assertEquals(2, viewModel.uiState.value.chat.messages.size)
+        assertEquals(1, viewModel.uiState.value.chat.toolCalls.size)
+        assertFalse(viewModel.uiState.value.chat.isSyncing)
+
+        // Navigate back to Main
+        viewModel.showMainScreen()
+        assertEquals(RoxyDestination.Main, viewModel.uiState.value.destination)
+
+        // Re-open sess-1: Must NOT blank out messages or tools!
+        viewModel.openSession("sess-1")
+        assertEquals(RoxyDestination.Chat, viewModel.uiState.value.destination)
+        assertEquals(2, viewModel.uiState.value.chat.messages.size)
+        assertEquals("Hello Roxy", viewModel.uiState.value.chat.messages[0].text)
+        assertEquals("Hello! How can I help?", viewModel.uiState.value.chat.messages[1].text)
+        assertEquals(1, viewModel.uiState.value.chat.toolCalls.size)
+        assertEquals("tool-1", viewModel.uiState.value.chat.toolCalls[0].id)
+        assertFalse(viewModel.uiState.value.chat.isSyncing)
+    }
+
+    @Test
+    fun snapshotReceivedWhileOnMainScreenIsCachedAndRenderedImmediatelyOnOpen() {
+        val client = FakeRemoteWorkspaceClient()
+        val viewModel = createViewModel(client = client)
+
+        client.fakeEvents.tryEmit(
+            RemoteEvent.SessionsReceived(
+                sessions = listOf(
+                    RemoteSessionInfo("sess-1", "Session #1", "Project #1"),
+                    RemoteSessionInfo("sess-2", "Session #2", "Project #2"),
+                ),
+                currentId = "sess-1"
+            )
+        )
+
+        // Phone receives a snapshot for sess-2 while the user is still looking at MainScreen
+        client.fakeEvents.tryEmit(
+            RemoteEvent.SnapshotReceived(
+                sessionId = "sess-2",
+                messages = listOf(
+                    ChatMessageUiModel(id = "msg-from-main", text = "Cached message", isUser = false)
+                ),
+                tools = listOf(
+                    ToolCallUiModel(
+                        id = "tool-main",
+                        type = ToolCallType.Terminal,
+                        name = "bash",
+                        title = "ls -la",
+                        detail = "",
+                        status = ToolCallStatus.Running
+                    )
+                )
+            )
+        )
+
+        // User now taps sess-2
+        viewModel.openSession("sess-2")
+
+        assertEquals(RoxyDestination.Chat, viewModel.uiState.value.destination)
+        assertEquals("Session #2", viewModel.uiState.value.chat.sessionTitle)
+        assertEquals(1, viewModel.uiState.value.chat.messages.size)
+        assertEquals("Cached message", viewModel.uiState.value.chat.messages.first().text)
+        assertEquals(1, viewModel.uiState.value.chat.toolCalls.size)
+        assertEquals("tool-main", viewModel.uiState.value.chat.toolCalls.first().id)
+        assertFalse(viewModel.uiState.value.chat.isSyncing)
+    }
+
+    @Test
+    fun disconnectRemoteClearsRamSessionCache() {
+        val client = FakeRemoteWorkspaceClient()
+        val viewModel = createViewModel(client = client)
+
+        client.fakeEvents.tryEmit(
+            RemoteEvent.SessionsReceived(
+                sessions = listOf(
+                    RemoteSessionInfo("sess-1", "Session #1", "Project #1"),
+                ),
+                currentId = "sess-1"
+            )
+        )
+
+        viewModel.openSession("sess-1")
+        client.fakeEvents.tryEmit(
+            RemoteEvent.SnapshotReceived(
+                sessionId = "sess-1",
+                messages = listOf(
+                    ChatMessageUiModel(id = "msg-1", text = "Sensitive data", isUser = true)
+                ),
+                tools = emptyList()
+            )
+        )
+
+        assertEquals(1, viewModel.uiState.value.chat.messages.size)
+
+        // Disconnect
+        viewModel.disconnectRemote()
+
+        assertEquals(RoxyDestination.Main, viewModel.uiState.value.destination)
+        assertTrue(viewModel.uiState.value.chat.messages.isEmpty())
+
+        // Reconnect fresh
+        client.fakeEvents.tryEmit(
+            RemoteEvent.SessionsReceived(
+                sessions = listOf(
+                    RemoteSessionInfo("sess-1", "Session #1", "Project #1"),
+                ),
+                currentId = "sess-1"
+            )
+        )
+
+        viewModel.openSession("sess-1")
+        assertTrue(viewModel.uiState.value.chat.messages.isEmpty())
+        assertTrue(viewModel.uiState.value.chat.isSyncing)
+    }
+
     private fun RoxyAppViewModel.toolCall(id: String): ToolCallUiModel =
         uiState.value.chat.toolCalls.first { it.id == id }
 }

@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -66,6 +67,7 @@ fun ChatFullScreen(
             sessionTitle = uiState.sessionTitle,
             projectName = uiState.projectName,
             isRunning = uiState.isRunning,
+            isSyncing = uiState.isSyncing,
             onBackClick = onBackClick,
         )
         HorizontalDivider(color = colors.border)
@@ -78,50 +80,92 @@ fun ChatFullScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            uiState.messages.forEach { message ->
-                item(key = message.id) {
-                    if (message.isUser) {
-                        Box(
-                            modifier = Modifier
-                                .widthIn(max = 720.dp)
-                                .fillMaxWidth(),
-                            contentAlignment = Alignment.CenterEnd,
+            if (uiState.isSyncing && uiState.messages.isEmpty() && uiState.toolCalls.isEmpty()) {
+                item(key = "syncing-indicator") {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 48.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
-                            Surface(
-                                shape = MaterialTheme.shapes.large,
-                                color = colors.surface2,
-                                border = BorderStroke(1.dp, colors.edge),
-                            ) {
-                                Text(
-                                    text = message.text,
-                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = colors.text,
-                                )
-                            }
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(28.dp),
+                                color = colors.accent,
+                                strokeWidth = 2.5.dp,
+                            )
+                            Text(
+                                text = "Syncing with desktop...",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = colors.textMuted,
+                            )
                         }
-                    } else {
+                    }
+                }
+            } else if (uiState.messages.isEmpty() && uiState.toolCalls.isEmpty()) {
+                item(key = "empty-session") {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 48.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
                         Text(
-                            text = message.text,
-                            modifier = Modifier
-                                .widthIn(max = 720.dp)
-                                .fillMaxWidth(),
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = colors.text,
+                            text = "No messages yet. Send a prompt to get started.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = colors.textMuted,
                         )
                     }
                 }
-            }
+            } else {
+                uiState.messages.forEach { message ->
+                    item(key = message.id) {
+                        if (message.isUser) {
+                            Box(
+                                modifier = Modifier
+                                    .widthIn(max = 720.dp)
+                                    .fillMaxWidth(),
+                                contentAlignment = Alignment.CenterEnd,
+                            ) {
+                                Surface(
+                                    shape = MaterialTheme.shapes.large,
+                                    color = colors.surface2,
+                                    border = BorderStroke(1.dp, colors.edge),
+                                ) {
+                                    Text(
+                                        text = message.text,
+                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = colors.text,
+                                    )
+                                }
+                            }
+                        } else {
+                            Text(
+                                text = message.text,
+                                modifier = Modifier
+                                    .widthIn(max = 720.dp)
+                                    .fillMaxWidth(),
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = colors.text,
+                            )
+                        }
+                    }
+                }
 
-            if (uiState.toolCalls.isNotEmpty()) {
-                item(key = "tool-calls") {
-                    ToolCallStack(
-                        toolCalls = uiState.toolCalls,
-                        onToolCallClick = onToolCallClick,
-                        modifier = Modifier
-                            .widthIn(max = 720.dp)
-                            .fillMaxWidth(),
-                    )
+                if (uiState.toolCalls.isNotEmpty()) {
+                    item(key = "tool-calls") {
+                        ToolCallStack(
+                            toolCalls = uiState.toolCalls,
+                            onToolCallClick = onToolCallClick,
+                            modifier = Modifier
+                                .widthIn(max = 720.dp)
+                                .fillMaxWidth(),
+                        )
+                    }
                 }
             }
         }
@@ -148,6 +192,7 @@ fun ChatHeader(
     sessionTitle: String,
     projectName: String,
     isRunning: Boolean = false,
+    isSyncing: Boolean = false,
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -205,6 +250,19 @@ fun ChatHeader(
                 text = "Thinking...",
                 style = MaterialTheme.typography.labelSmall,
                 color = colors.accent,
+            )
+        } else if (isSyncing) {
+            Surface(
+                modifier = Modifier.size(8.dp),
+                shape = CircleShape,
+                color = colors.textSubtle,
+                content = {},
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "Syncing...",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.textSubtle,
             )
         } else {
             Text(

@@ -38,4 +38,5 @@ data class ChatFullScreenUiState(
     val toolCalls: List<ToolCallUiModel>,
     val composerText: String = "",
     val isRunning: Boolean = false,
+    val isSyncing: Boolean = false,
 )

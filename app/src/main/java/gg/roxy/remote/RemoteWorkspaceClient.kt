@@ -36,7 +36,13 @@ sealed interface RemoteEvent {
     data class ToolStarted(val sessionId: String, val callId: String, val tool: String, val title: String) : RemoteEvent
     data class ToolDelta(val sessionId: String, val callId: String, val chunk: String) : RemoteEvent
     data class ToolEnded(val sessionId: String, val callId: String, val output: String, val ok: Boolean) : RemoteEvent
-    data class TurnChanged(val sessionId: String, val isRunning: Boolean, val userText: String?) : RemoteEvent
+    data class TurnChanged(
+        val sessionId: String,
+        val isRunning: Boolean,
+        val userText: String? = null,
+        val inFlightText: String? = null,
+        val inFlightTools: List<ToolCallUiModel> = emptyList(),
+    ) : RemoteEvent
     data class ErrorReceived(val message: String) : RemoteEvent
 }
 
@@ -115,7 +121,7 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
         })
     }
 
-    private fun handleIncomingMessage(text: String, token: String, pin: String) {
+    internal fun handleIncomingMessage(text: String, token: String = "test-token", pin: String = "123456") {
         val json = try {
             JSONObject(text)
         } catch (_: Exception) {
@@ -166,7 +172,7 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
                     val content = mObj.optString("content", "")
                     val partsArray = mObj.optJSONArray("parts")
 
-                    var textAccumulator = content
+                    var textAccumulator = ""
                     if (partsArray != null && partsArray.length() > 0) {
                         val textParts = mutableListOf<String>()
                         for (p in 0 until partsArray.length()) {
@@ -175,6 +181,10 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
                                 "text" -> {
                                     val partText = partObj.optString("text", "")
                                     if (partText.isNotBlank()) textParts.add(partText)
+                                }
+                                "reasoning" -> {
+                                    val reasoningText = partObj.optString("text", "")
+                                    if (reasoningText.isNotBlank()) textParts.add(reasoningText)
                                 }
                                 "tool" -> {
                                     val toolName = partObj.optString("tool", "tool")
@@ -201,6 +211,8 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
                         if (textParts.isNotEmpty()) {
                             textAccumulator = textParts.joinToString("\n\n")
                         }
+                    } else {
+                        textAccumulator = content
                     }
 
                     if (textAccumulator.isNotBlank()) {
@@ -259,8 +271,52 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
                 val sessionId = json.optString("sessionId", "")
                 val state = json.optString("state", "idle")
                 val userText = json.optString("userText").takeIf { it.isNotBlank() }
+                val isRunning = state == "running"
+
+                val inFlightTools = mutableListOf<ToolCallUiModel>()
+                var inFlightText: String? = null
+                val partsArray = json.optJSONArray("parts")
+                if (partsArray != null && partsArray.length() > 0) {
+                    val textParts = mutableListOf<String>()
+                    for (p in 0 until partsArray.length()) {
+                        val partObj = partsArray.optJSONObject(p) ?: continue
+                        when (partObj.optString("type")) {
+                            "text" -> {
+                                val t = partObj.optString("text", "")
+                                if (t.isNotBlank()) textParts.add(t)
+                            }
+                            "reasoning" -> {
+                                val r = partObj.optString("text", "")
+                                if (r.isNotBlank()) textParts.add(r)
+                            }
+                            "tool" -> {
+                                val toolName = partObj.optString("tool", "tool")
+                                val toolTitle = partObj.optString("title", toolName)
+                                val toolState = partObj.optString("state", "running")
+                                val toolOutput = partObj.optString("output", "")
+                                val callId = partObj.optString("callId", UUID.randomUUID().toString())
+                                val toolType = resolveToolType(toolName)
+                                inFlightTools.add(
+                                    ToolCallUiModel(
+                                        id = callId,
+                                        type = toolType,
+                                        name = toolName,
+                                        title = toolTitle,
+                                        detail = toolOutput,
+                                        status = if (toolState == "done") ToolCallStatus.Complete else ToolCallStatus.Running,
+                                        isExpanded = false,
+                                    )
+                                )
+                            }
+                        }
+                    }
+                    if (textParts.isNotEmpty()) {
+                        inFlightText = textParts.joinToString("\n\n")
+                    }
+                }
+
                 scope.launch {
-                    _events.emit(RemoteEvent.TurnChanged(sessionId, state == "running", userText))
+                    _events.emit(RemoteEvent.TurnChanged(sessionId, isRunning, userText, inFlightText, inFlightTools))
                 }
             }
             "error" -> {
@@ -277,7 +333,7 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
 
     private fun resolveToolType(name: String): ToolCallType {
         val normalized = name.lowercase()
-        return if (normalized in listOf("read", "write", "edit", "glob", "grep", "file", "read_file", "write_file")) {
+        return if (normalized in listOf("read", "write", "edit", "glob", "grep", "file", "read_file", "write_file", "list", "list_dir")) {
             ToolCallType.File
         } else {
             ToolCallType.Terminal

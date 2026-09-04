@@ -61,6 +61,14 @@ class RoxyAppViewModel(
 
     private var activeSessionId: String? = null
 
+    private data class SessionChatCache(
+        val messages: List<ChatMessageUiModel> = emptyList(),
+        val toolCalls: List<ToolCallUiModel> = emptyList(),
+        val isRunning: Boolean = false,
+    )
+
+    private val sessionCache = mutableMapOf<String, SessionChatCache>()
+
     init {
         observeRemote()
         val savedToken = storage.savedToken
@@ -118,6 +126,8 @@ class RoxyAppViewModel(
                             )
                         }
                         is RemoteConnectionState.Disconnected -> {
+                            sessionCache.clear()
+                            activeSessionId = null
                             val emptyPc = ComputerUiModel(
                                 id = "none",
                                 name = "No computer connected",
@@ -125,6 +135,7 @@ class RoxyAppViewModel(
                                 isConnected = false,
                             )
                             state.copy(
+                                destination = RoxyDestination.Main,
                                 main = state.main.copy(
                                     isConnecting = false,
                                     selectedComputer = emptyPc,
@@ -136,6 +147,7 @@ class RoxyAppViewModel(
                                     projectName = "",
                                     messages = emptyList(),
                                     toolCalls = emptyList(),
+                                    isSyncing = false,
                                 ),
                             )
                         }
@@ -160,102 +172,151 @@ class RoxyAppViewModel(
                 }
             }
             is RemoteEvent.SnapshotReceived -> {
+                val current = sessionCache[event.sessionId] ?: SessionChatCache()
+                sessionCache[event.sessionId] = current.copy(
+                    messages = event.messages,
+                    toolCalls = event.tools,
+                )
+
                 if (activeSessionId == null || activeSessionId == event.sessionId) {
-                    activeSessionId = event.sessionId
+                    if (activeSessionId == null) {
+                        activeSessionId = event.sessionId
+                    }
                     _uiState.update { state ->
                         state.copy(
                             chat = state.chat.copy(
                                 messages = event.messages,
                                 toolCalls = event.tools,
+                                isSyncing = false,
                             )
                         )
                     }
                 }
             }
             is RemoteEvent.TextDelta -> {
+                val current = sessionCache[event.sessionId] ?: SessionChatCache()
+                val cachedMessages = current.messages.toMutableList()
+                if (cachedMessages.isEmpty() || cachedMessages.last().isUser) {
+                    cachedMessages.add(
+                        ChatMessageUiModel(
+                            id = UUID.randomUUID().toString(),
+                            text = event.chunk,
+                            isUser = false,
+                        )
+                    )
+                } else {
+                    val last = cachedMessages.last()
+                    cachedMessages[cachedMessages.lastIndex] = last.copy(text = last.text + event.chunk)
+                }
+                sessionCache[event.sessionId] = current.copy(messages = cachedMessages)
+
                 if (activeSessionId == null || activeSessionId == event.sessionId) {
                     _uiState.update { state ->
-                        val messages = state.chat.messages.toMutableList()
-                        if (messages.isEmpty() || messages.last().isUser) {
-                            messages.add(
-                                ChatMessageUiModel(
-                                    id = UUID.randomUUID().toString(),
-                                    text = event.chunk,
-                                    isUser = false,
-                                )
-                            )
-                        } else {
-                            val last = messages.last()
-                            messages[messages.lastIndex] = last.copy(text = last.text + event.chunk)
-                        }
-                        state.copy(chat = state.chat.copy(messages = messages))
+                        state.copy(chat = state.chat.copy(messages = cachedMessages))
                     }
                 }
             }
             is RemoteEvent.ToolStarted -> {
+                val type = if (event.tool.lowercase() in listOf("read", "write", "edit", "glob", "grep", "file", "read_file", "write_file", "list", "list_dir")) {
+                    ToolCallType.File
+                } else {
+                    ToolCallType.Terminal
+                }
+                val tool = ToolCallUiModel(
+                    id = event.callId,
+                    type = type,
+                    name = event.tool,
+                    title = event.title,
+                    detail = "",
+                    status = ToolCallStatus.Running,
+                    isExpanded = false,
+                )
+                val current = sessionCache[event.sessionId] ?: SessionChatCache()
+                val updatedTools = current.toolCalls + tool
+                sessionCache[event.sessionId] = current.copy(toolCalls = updatedTools)
+
                 if (activeSessionId == null || activeSessionId == event.sessionId) {
                     _uiState.update { state ->
-                        val type = if (event.tool.lowercase() in listOf("read", "write", "edit", "glob", "grep", "file")) {
-                            ToolCallType.File
-                        } else {
-                            ToolCallType.Terminal
-                        }
-                        val tool = ToolCallUiModel(
-                            id = event.callId,
-                            type = type,
-                            name = event.tool,
-                            title = event.title,
-                            detail = "",
-                            status = ToolCallStatus.Running,
-                            isExpanded = false,
-                        )
-                        state.copy(chat = state.chat.copy(toolCalls = state.chat.toolCalls + tool))
+                        state.copy(chat = state.chat.copy(toolCalls = updatedTools))
                     }
                 }
             }
             is RemoteEvent.ToolDelta -> {
+                val current = sessionCache[event.sessionId] ?: SessionChatCache()
+                val updatedTools = current.toolCalls.map { tool ->
+                    if (tool.id == event.callId) {
+                        tool.copy(detail = tool.detail + event.chunk)
+                    } else {
+                        tool
+                    }
+                }
+                sessionCache[event.sessionId] = current.copy(toolCalls = updatedTools)
+
                 if (activeSessionId == null || activeSessionId == event.sessionId) {
                     _uiState.update { state ->
-                        val updatedTools = state.chat.toolCalls.map { tool ->
-                            if (tool.id == event.callId) {
-                                tool.copy(detail = tool.detail + event.chunk)
-                            } else {
-                                tool
-                            }
-                        }
                         state.copy(chat = state.chat.copy(toolCalls = updatedTools))
                     }
                 }
             }
             is RemoteEvent.ToolEnded -> {
+                val current = sessionCache[event.sessionId] ?: SessionChatCache()
+                val updatedTools = current.toolCalls.map { tool ->
+                    if (tool.id == event.callId) {
+                        tool.copy(
+                            status = ToolCallStatus.Complete,
+                            detail = if (event.output.isNotBlank()) event.output else tool.detail,
+                        )
+                    } else {
+                        tool
+                    }
+                }
+                sessionCache[event.sessionId] = current.copy(toolCalls = updatedTools)
+
                 if (activeSessionId == null || activeSessionId == event.sessionId) {
                     _uiState.update { state ->
-                        val updatedTools = state.chat.toolCalls.map { tool ->
-                            if (tool.id == event.callId) {
-                                tool.copy(
-                                    status = ToolCallStatus.Complete,
-                                    detail = if (event.output.isNotBlank()) event.output else tool.detail,
-                                )
-                            } else {
-                                tool
-                            }
-                        }
                         state.copy(chat = state.chat.copy(toolCalls = updatedTools))
                     }
                 }
             }
             is RemoteEvent.TurnChanged -> {
+                val current = sessionCache[event.sessionId] ?: SessionChatCache()
+                var currentMessages = current.messages
+                if (event.userText != null && (currentMessages.isEmpty() || currentMessages.last().text != event.userText)) {
+                    currentMessages = currentMessages + ChatMessageUiModel(
+                        id = UUID.randomUUID().toString(),
+                        text = event.userText,
+                        isUser = true,
+                    )
+                }
+                if (event.inFlightText != null && (currentMessages.isEmpty() || currentMessages.last().isUser)) {
+                    currentMessages = currentMessages + ChatMessageUiModel(
+                        id = UUID.randomUUID().toString(),
+                        text = event.inFlightText,
+                        isUser = false,
+                    )
+                }
+                val currentTools = if (event.inFlightTools.isNotEmpty()) {
+                    val existingIds = current.toolCalls.map { it.id }.toSet()
+                    current.toolCalls + event.inFlightTools.filterNot { it.id in existingIds }
+                } else {
+                    current.toolCalls
+                }
+
+                sessionCache[event.sessionId] = current.copy(
+                    isRunning = event.isRunning,
+                    messages = currentMessages,
+                    toolCalls = currentTools,
+                )
+
                 if (activeSessionId == null || activeSessionId == event.sessionId) {
                     _uiState.update { state ->
-                        var currentMessages = state.chat.messages
-                        if (event.userText != null && (currentMessages.isEmpty() || currentMessages.last().text != event.userText)) {
-                            currentMessages = currentMessages + ChatMessageUiModel(
-                                id = UUID.randomUUID().toString(),
-                                text = event.userText,
-                                isUser = true,
+                        state.copy(
+                            chat = state.chat.copy(
+                                isRunning = event.isRunning,
+                                messages = currentMessages,
+                                toolCalls = currentTools,
                             )
-                        }
-                        state.copy(chat = state.chat.copy(isRunning = event.isRunning, messages = currentMessages))
+                        )
                     }
                 }
             }
@@ -378,6 +439,8 @@ class RoxyAppViewModel(
     }
 
     fun disconnectRemote() {
+        sessionCache.clear()
+        activeSessionId = null
         storage.clear()
         remoteClient.disconnect()
         _uiState.update { state ->
@@ -388,6 +451,7 @@ class RoxyAppViewModel(
                 isConnected = false,
             )
             state.copy(
+                destination = RoxyDestination.Main,
                 main = state.main.copy(
                     selectedComputer = emptyPc,
                     computers = emptyList(),
@@ -400,6 +464,7 @@ class RoxyAppViewModel(
                     projectName = "",
                     messages = emptyList(),
                     toolCalls = emptyList(),
+                    isSyncing = false,
                 ),
             )
         }
@@ -428,6 +493,9 @@ class RoxyAppViewModel(
         activeSessionId = sessionId
         remoteClient.switchSession(sessionId)
 
+        val cached = sessionCache[sessionId]
+        val hasCache = cached != null && (cached.messages.isNotEmpty() || cached.toolCalls.isNotEmpty())
+
         _uiState.update { state ->
             val project = state.main.projects.firstOrNull { project ->
                 project.sessions.any { it.id == sessionId }
@@ -450,8 +518,10 @@ class RoxyAppViewModel(
                     sessionTitle = session.title,
                     projectName = project.name,
                     composerText = "",
-                    messages = emptyList(),
-                    toolCalls = emptyList(),
+                    messages = cached?.messages ?: emptyList(),
+                    toolCalls = cached?.toolCalls ?: emptyList(),
+                    isRunning = cached?.isRunning ?: false,
+                    isSyncing = !hasCache,
                 ),
             )
         }
@@ -477,6 +547,8 @@ class RoxyAppViewModel(
             isUser = true,
         )
 
+        val activeId = activeSessionId
+
         _uiState.update { state ->
             state.copy(
                 chat = state.chat.copy(
@@ -487,10 +559,29 @@ class RoxyAppViewModel(
             )
         }
 
+        if (activeId != null) {
+            val cached = sessionCache[activeId] ?: SessionChatCache()
+            sessionCache[activeId] = cached.copy(
+                messages = cached.messages + userMessage,
+                isRunning = true,
+            )
+        }
+
         remoteClient.sendPrompt(currentText)
     }
 
     fun toggleToolCall(toolCallId: String) {
+        val activeId = activeSessionId
+        if (activeId != null) {
+            val cached = sessionCache[activeId]
+            if (cached != null) {
+                val updated = cached.toolCalls.map { tool ->
+                    if (tool.id == toolCallId) tool.copy(isExpanded = !tool.isExpanded) else tool
+                }
+                sessionCache[activeId] = cached.copy(toolCalls = updated)
+            }
+        }
+
         _uiState.update { state ->
             state.copy(
                 chat = state.chat.copy(
@@ -530,6 +621,7 @@ private fun initialUiState(): RoxyAppUiState {
             projectName = "",
             messages = emptyList(),
             toolCalls = emptyList(),
+            isSyncing = false,
         ),
     )
 }
