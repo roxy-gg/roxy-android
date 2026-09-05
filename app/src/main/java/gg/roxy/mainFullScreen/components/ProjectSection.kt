@@ -1,6 +1,13 @@
 package gg.roxy.mainFullScreen.components
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,6 +21,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -21,8 +29,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -37,12 +51,19 @@ fun ProjectSection(
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.roxyColors
+    var isExpanded by rememberSaveable(project.id) { mutableStateOf(true) }
+    val chevronRotation by animateFloatAsState(
+        targetValue = if (isExpanded) 0f else -90f,
+        label = "chevronRotation",
+    )
 
     Column(modifier = modifier) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 4.dp, vertical = 9.dp),
+                .clip(MaterialTheme.shapes.small)
+                .clickable { isExpanded = !isExpanded }
+                .padding(horizontal = 4.dp, vertical = 7.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
@@ -55,7 +76,17 @@ fun ProjectSection(
             Text(
                 text = project.name,
                 style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
                 color = colors.textMuted,
+            )
+            Spacer(Modifier.width(4.dp))
+            Icon(
+                imageVector = Icons.Rounded.ExpandMore,
+                contentDescription = if (isExpanded) "Collapse project" else "Expand project",
+                modifier = Modifier
+                    .size(16.dp)
+                    .rotate(chevronRotation),
+                tint = colors.textSubtle,
             )
             Spacer(Modifier.weight(1f))
             Text(
@@ -65,23 +96,30 @@ fun ProjectSection(
             )
         }
 
-        Surface(
-            shape = MaterialTheme.shapes.large,
-            color = colors.surface,
-            border = BorderStroke(1.dp, colors.edge),
-            tonalElevation = 0.dp,
+        AnimatedVisibility(
+            visible = isExpanded,
+            enter = expandVertically() + fadeIn(),
+            exit = shrinkVertically() + fadeOut(),
         ) {
-            Column {
-                project.sessions.forEachIndexed { index, session ->
-                    SessionRow(
-                        session = session,
-                        onClick = { onSessionSelected(session.id) },
-                    )
-                    if (index != project.sessions.lastIndex) {
-                        HorizontalDivider(
-                            modifier = Modifier.padding(start = 19.dp),
-                            color = colors.border,
+            Surface(
+                modifier = Modifier.padding(top = 4.dp),
+                shape = MaterialTheme.shapes.large,
+                color = colors.surface,
+                border = BorderStroke(1.dp, colors.edge),
+                tonalElevation = 0.dp,
+            ) {
+                Column {
+                    project.sessions.forEachIndexed { index, session ->
+                        SessionRow(
+                            session = session,
+                            onClick = { onSessionSelected(session.id) },
                         )
+                        if (index != project.sessions.lastIndex) {
+                            HorizontalDivider(
+                                modifier = Modifier.padding(start = 19.dp),
+                                color = colors.border,
+                            )
+                        }
                     }
                 }
             }

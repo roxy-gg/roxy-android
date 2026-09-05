@@ -10,6 +10,9 @@ kotlin = "2.2.10"
 composeBom = "2026.02.01"
 hilt = "2.60.1"
 ksp = "2.3.11"
+okhttp = "4.12.0"
+playServicesCodeScanner = "16.1.0"
+json = "20240303"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -30,6 +33,9 @@ androidx-compose-material3 = { group = "androidx.compose.material3", name = "mat
 androidx-compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
 hilt-android = { group = "com.google.dagger", name = "hilt-android", version.ref = "hilt" }
 hilt-compiler = { group = "com.google.dagger", name = "hilt-compiler", version.ref = "hilt" }
+okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+play-services-code-scanner = { group = "com.google.android.gms", name = "play-services-code-scanner", version.ref = "playServicesCodeScanner" }
+json = { group = "org.json", name = "json", version.ref = "json" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

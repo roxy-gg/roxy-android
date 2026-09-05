@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <application
         android:name=".RoxyApplication"
         android:allowBackup="true"
@@ -11,15 +13,30 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.Roxy">
+
+        <meta-data
+            android:name="com.google.android.gms.vision.DEPENDENCIES"
+            android:value="barcode" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:theme="@style/Theme.Roxy"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="roxy.gg" android:pathPrefix="/remote" />
+                <data android:scheme="http" android:host="roxy.gg" android:pathPrefix="/remote" />
+                <data android:scheme="roxy" android:host="remote" />
             </intent-filter>
         </activity>
     </application>

@@ -2,12 +2,6 @@ package gg.roxy.chatFullscreen.businessLogic
 
 import androidx.compose.runtime.Immutable
 
-@Immutable
-data class ChatMessageUiModel(
-    val id: String,
-    val text: String,
-)
-
 enum class ToolCallType {
     File,
     Terminal,
@@ -30,10 +24,45 @@ data class ToolCallUiModel(
 )
 
 @Immutable
+sealed interface ChatPartUiModel {
+    val id: String
+
+    @Immutable
+    data class Text(
+        override val id: String,
+        val text: String,
+    ) : ChatPartUiModel
+
+    @Immutable
+    data class Reasoning(
+        override val id: String,
+        val text: String,
+        val isExpanded: Boolean = false,
+    ) : ChatPartUiModel
+
+    @Immutable
+    data class Tool(
+        val tool: ToolCallUiModel,
+    ) : ChatPartUiModel {
+        override val id: String get() = tool.id
+    }
+}
+
+@Immutable
+data class ChatMessageUiModel(
+    val id: String,
+    val text: String = "",
+    val isUser: Boolean = false,
+    val parts: List<ChatPartUiModel> = emptyList(),
+)
+
+@Immutable
 data class ChatFullScreenUiState(
     val sessionTitle: String,
     val projectName: String,
     val messages: List<ChatMessageUiModel>,
-    val toolCalls: List<ToolCallUiModel>,
+    val toolCalls: List<ToolCallUiModel> = emptyList(),
     val composerText: String = "",
+    val isRunning: Boolean = false,
+    val isSyncing: Boolean = false,
 )
