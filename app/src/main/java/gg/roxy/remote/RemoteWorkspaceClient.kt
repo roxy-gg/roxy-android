@@ -164,7 +164,16 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
         handshakeTimeoutJob?.cancel()
         handshakeTimeoutJob = null
         isHandshakeComplete = false
+
+        val doomedSocket = activeWebSocket
         activeWebSocket = null
+        // Retire this generation before cancelling so the socket's own teardown
+        // callbacks are seen as stale and cannot reopen the connection.
+        connectionGeneration++
+        try {
+            doomedSocket?.cancel()
+        } catch (_: Exception) {}
+
         _connectionState.value = RemoteConnectionState.Error(message)
     }
 
@@ -394,9 +403,6 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
             "error" -> {
                 val msg = json.optString("message", "Unknown error from remote host")
                 if (!isHandshakeComplete) {
-                    try {
-                        activeWebSocket?.close(1000, "Pairing rejected")
-                    } catch (_: Exception) {}
                     failConnection(msg, connectionGeneration)
                 } else {
                     scope.launch {
@@ -459,11 +465,20 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
         connectionGeneration++
         handshakeTimeoutJob?.cancel()
         handshakeTimeoutJob = null
-        isHandshakeComplete = false
-        try {
-            activeWebSocket?.close(1000, "User disconnected")
-        } catch (_: Exception) {}
+
+        val socket = activeWebSocket
         activeWebSocket = null
+        try {
+            if (isHandshakeComplete) {
+                // Graceful close: the peer is live and will echo the close frame.
+                socket?.close(1000, "User disconnected")
+            } else {
+                // Never handshook, so the peer may never reply to a close frame.
+                // Cancel to release the socket immediately instead of leaking it.
+                socket?.cancel()
+            }
+        } catch (_: Exception) {}
+        isHandshakeComplete = false
         _connectionState.value = RemoteConnectionState.Disconnected
     }
 
