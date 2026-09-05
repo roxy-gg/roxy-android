@@ -67,7 +67,7 @@ fun ConnectComputerDialog(
 
     val canConnect = tokenInput.isNotBlank() && pinInput.trim().length == 6 && !isConnecting
 
-    Dialog(onDismissRequest = { if (!isConnecting) onDismiss() }) {
+    Dialog(onDismissRequest = onDismiss) {
         Surface(
             modifier = modifier.fillMaxWidth(),
             shape = RoundedCornerShape(20.dp),
@@ -311,7 +311,6 @@ fun ConnectComputerDialog(
                 ) {
                     OutlinedButton(
                         onClick = onDismiss,
-                        enabled = !isConnecting,
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.outlinedButtonColors(

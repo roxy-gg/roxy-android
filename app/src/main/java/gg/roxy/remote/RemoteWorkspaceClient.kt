@@ -11,6 +11,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -70,6 +72,8 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
 
     private var activeWebSocket: WebSocket? = null
     private var pendingPin: String = ""
+    private var handshakeTimeoutJob: Job? = null
+    private var isHandshakeComplete = false
 
     private val _connectionState = MutableStateFlow<RemoteConnectionState>(RemoteConnectionState.Disconnected)
     override val connectionState: StateFlow<RemoteConnectionState> = _connectionState.asStateFlow()
@@ -92,7 +96,15 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
 
         disconnect()
         pendingPin = cleanedPin
+        isHandshakeComplete = false
         _connectionState.value = RemoteConnectionState.Connecting
+
+        handshakeTimeoutJob = scope.launch {
+            delay(HANDSHAKE_TIMEOUT_MS)
+            if (!isHandshakeComplete) {
+                failConnection("The PC did not respond. Check the PIN and that Roxy is running on your PC.")
+            }
+        }
 
         val wsUrl = "wss://roxy.gg/api/remote/ws?token=${token}"
         val request = Request.Builder().url(wsUrl).build()
@@ -111,15 +123,29 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                _connectionState.value = RemoteConnectionState.Error(
-                    t.localizedMessage ?: "Connection failure to PC relay"
-                )
+                failConnection(t.localizedMessage ?: "Connection failure to PC relay")
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                _connectionState.value = RemoteConnectionState.Disconnected
+                if (!isHandshakeComplete) {
+                    failConnection(
+                        reason.takeIf { it.isNotBlank() }
+                            ?: "The PC rejected the connection. Verify the 6-digit PIN."
+                    )
+                } else {
+                    handshakeTimeoutJob?.cancel()
+                    _connectionState.value = RemoteConnectionState.Disconnected
+                }
             }
         })
+    }
+
+    private fun failConnection(message: String) {
+        handshakeTimeoutJob?.cancel()
+        handshakeTimeoutJob = null
+        isHandshakeComplete = false
+        activeWebSocket = null
+        _connectionState.value = RemoteConnectionState.Error(message)
     }
 
     internal fun handleIncomingMessage(text: String, token: String = "test-token", pin: String = "123456") {
@@ -131,11 +157,15 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
 
         when (json.optString("t")) {
             "hello-ok" -> {
+                handshakeTimeoutJob?.cancel()
+                isHandshakeComplete = true
                 storage.savedToken = token
                 storage.savedPin = pin
                 _connectionState.value = RemoteConnectionState.Connected()
             }
             "paired" -> {
+                handshakeTimeoutJob?.cancel()
+                isHandshakeComplete = true
                 _connectionState.value = RemoteConnectionState.Connected()
             }
             "sessions" -> {
@@ -343,11 +373,20 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
             }
             "error" -> {
                 val msg = json.optString("message", "Unknown error from remote host")
-                scope.launch {
-                    _events.emit(RemoteEvent.ErrorReceived(msg))
+                if (!isHandshakeComplete) {
+                    try {
+                        activeWebSocket?.close(1000, "Pairing rejected")
+                    } catch (_: Exception) {}
+                    failConnection(msg)
+                } else {
+                    scope.launch {
+                        _events.emit(RemoteEvent.ErrorReceived(msg))
+                    }
                 }
             }
             "bye" -> {
+                handshakeTimeoutJob?.cancel()
+                isHandshakeComplete = false
                 _connectionState.value = RemoteConnectionState.Disconnected
             }
         }
@@ -397,10 +436,17 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
     }
 
     override fun disconnect() {
+        handshakeTimeoutJob?.cancel()
+        handshakeTimeoutJob = null
+        isHandshakeComplete = false
         try {
             activeWebSocket?.close(1000, "User disconnected")
         } catch (_: Exception) {}
         activeWebSocket = null
         _connectionState.value = RemoteConnectionState.Disconnected
+    }
+
+    private companion object {
+        const val HANDSHAKE_TIMEOUT_MS = 15_000L
     }
 }

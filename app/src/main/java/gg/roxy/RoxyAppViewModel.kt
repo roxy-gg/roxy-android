@@ -477,10 +477,14 @@ class RoxyAppViewModel(
     }
 
     fun dismissConnectDialog() {
+        if (_uiState.value.main.isConnecting) {
+            remoteClient.disconnect()
+        }
         _uiState.update { state ->
             state.copy(
                 main = state.main.copy(
                     isConnectingDialogVisible = false,
+                    isConnecting = false,
                     connectionError = null,
                     qrFeedbackMessage = null,
                 )
