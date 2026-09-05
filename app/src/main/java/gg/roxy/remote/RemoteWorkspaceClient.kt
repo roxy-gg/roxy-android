@@ -70,10 +70,15 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .build()
 
-    private var activeWebSocket: WebSocket? = null
-    private var pendingPin: String = ""
-    private var handshakeTimeoutJob: Job? = null
-    private var isHandshakeComplete = false
+    @Volatile private var activeWebSocket: WebSocket? = null
+    @Volatile private var handshakeTimeoutJob: Job? = null
+    @Volatile private var isHandshakeComplete = false
+
+    /**
+     * Incremented on every connect/disconnect so that callbacks belonging to a
+     * superseded socket can detect they are stale and stop touching shared state.
+     */
+    @Volatile private var connectionGeneration = 0
 
     private val _connectionState = MutableStateFlow<RemoteConnectionState>(RemoteConnectionState.Disconnected)
     override val connectionState: StateFlow<RemoteConnectionState> = _connectionState.asStateFlow()
@@ -95,14 +100,17 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
         }
 
         disconnect()
-        pendingPin = cleanedPin
         isHandshakeComplete = false
+        val generation = ++connectionGeneration
         _connectionState.value = RemoteConnectionState.Connecting
 
         handshakeTimeoutJob = scope.launch {
             delay(HANDSHAKE_TIMEOUT_MS)
             if (!isHandshakeComplete) {
-                failConnection("The PC did not respond. Check the PIN and that Roxy is running on your PC.")
+                failConnection(
+                    "The PC did not respond. Check the PIN and that Roxy is running on your PC.",
+                    generation,
+                )
             }
         }
 
@@ -111,26 +119,33 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
 
         activeWebSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                if (generation != connectionGeneration) return
                 val helloPayload = JSONObject().apply {
                     put("t", "hello")
-                    put("pin", pendingPin)
+                    put("pin", cleanedPin)
                 }
                 webSocket.send(helloPayload.toString())
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                if (generation != connectionGeneration) return
                 handleIncomingMessage(text, token, cleanedPin)
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                failConnection(t.localizedMessage ?: "Connection failure to PC relay")
+                failConnection(
+                    t.localizedMessage ?: "Connection failure to PC relay",
+                    generation,
+                )
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (generation != connectionGeneration) return
                 if (!isHandshakeComplete) {
                     failConnection(
                         reason.takeIf { it.isNotBlank() }
-                            ?: "The PC rejected the connection. Verify the 6-digit PIN."
+                            ?: "The PC rejected the connection. Verify the 6-digit PIN.",
+                        generation,
                     )
                 } else {
                     handshakeTimeoutJob?.cancel()
@@ -140,7 +155,12 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
         })
     }
 
-    private fun failConnection(message: String) {
+    /**
+     * Only tears down shared state if [generation] still matches the live connection,
+     * so a superseded socket cannot kill the connection that replaced it.
+     */
+    private fun failConnection(message: String, generation: Int) {
+        if (generation != connectionGeneration) return
         handshakeTimeoutJob?.cancel()
         handshakeTimeoutJob = null
         isHandshakeComplete = false
@@ -377,7 +397,7 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
                     try {
                         activeWebSocket?.close(1000, "Pairing rejected")
                     } catch (_: Exception) {}
-                    failConnection(msg)
+                    failConnection(msg, connectionGeneration)
                 } else {
                     scope.launch {
                         _events.emit(RemoteEvent.ErrorReceived(msg))
@@ -436,6 +456,7 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
     }
 
     override fun disconnect() {
+        connectionGeneration++
         handshakeTimeoutJob?.cancel()
         handshakeTimeoutJob = null
         isHandshakeComplete = false
