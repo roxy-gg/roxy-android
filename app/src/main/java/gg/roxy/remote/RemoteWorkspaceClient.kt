@@ -139,20 +139,41 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
                 )
             }
 
+            // The peer closing first surfaces as onClosing, not onClosed: OkHttp only
+            // reports onClosed once we have sent our own close frame. Echo the close
+            // so a PIN rejection is reported immediately instead of waiting for the
+            // handshake timeout.
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                if (generation != connectionGeneration) return
+                try {
+                    webSocket.close(1000, null)
+                } catch (_: Exception) {}
+                handlePeerClose(reason, generation)
+            }
+
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 if (generation != connectionGeneration) return
-                if (!isHandshakeComplete) {
-                    failConnection(
-                        reason.takeIf { it.isNotBlank() }
-                            ?: "The PC rejected the connection. Verify the 6-digit PIN.",
-                        generation,
-                    )
-                } else {
-                    handshakeTimeoutJob?.cancel()
-                    _connectionState.value = RemoteConnectionState.Disconnected
-                }
+                handlePeerClose(reason, generation)
             }
         })
+    }
+
+    private fun handlePeerClose(reason: String, generation: Int) {
+        if (generation != connectionGeneration) return
+        if (!isHandshakeComplete) {
+            failConnection(
+                reason.takeIf { it.isNotBlank() }
+                    ?: "The PC rejected the connection. Verify the 6-digit PIN.",
+                generation,
+            )
+        } else {
+            handshakeTimeoutJob?.cancel()
+            handshakeTimeoutJob = null
+            isHandshakeComplete = false
+            activeWebSocket = null
+            connectionGeneration++
+            _connectionState.value = RemoteConnectionState.Disconnected
+        }
     }
 
     /**
