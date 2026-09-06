@@ -477,6 +477,8 @@ class RoxyAppViewModel(
     }
 
     fun dismissConnectDialog() {
+        // Aborts the in-flight attempt; the connectionState collector owns
+        // isConnecting and clears it when Disconnected arrives.
         if (_uiState.value.main.isConnecting) {
             remoteClient.disconnect()
         }
@@ -484,7 +486,6 @@ class RoxyAppViewModel(
             state.copy(
                 main = state.main.copy(
                     isConnectingDialogVisible = false,
-                    isConnecting = false,
                     connectionError = null,
                     qrFeedbackMessage = null,
                 )
