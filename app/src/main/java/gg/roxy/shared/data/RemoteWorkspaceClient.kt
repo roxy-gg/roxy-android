@@ -75,6 +75,9 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
     @Volatile private var handshakeTimeoutJob: Job? = null
     @Volatile private var isHandshakeComplete = false
 
+    /** Session requested before the socket was ready; replayed after the handshake. */
+    @Volatile private var pendingSwitchSessionId: String? = null
+
     /**
      * Incremented on every connect/disconnect so that callbacks belonging to a
      * superseded socket can detect they are stale and stop touching shared state.
@@ -84,7 +87,9 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
     private val _connectionState = MutableStateFlow<RemoteConnectionState>(RemoteConnectionState.Disconnected)
     override val connectionState: StateFlow<RemoteConnectionState> = _connectionState.asStateFlow()
 
-    private val _events = MutableSharedFlow<RemoteEvent>(extraBufferCapacity = 64)
+    // replay = 1 so a snapshot emitted before the ViewModel subscribes is still
+    // delivered; without it the chat stays empty until the next remote event.
+    private val _events = MutableSharedFlow<RemoteEvent>(replay = 1, extraBufferCapacity = 64)
     override val events: SharedFlow<RemoteEvent> = _events.asSharedFlow()
 
     override fun connect(rawTokenOrUrl: String, pin: String) {
@@ -213,11 +218,13 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
                 storage.savedToken = token
                 storage.savedPin = pin
                 _connectionState.value = RemoteConnectionState.Connected()
+                flushPendingSwitchSession()
             }
             "paired" -> {
                 handshakeTimeoutJob?.cancel()
                 isHandshakeComplete = true
                 _connectionState.value = RemoteConnectionState.Connected()
+                flushPendingSwitchSession()
             }
             "sessions" -> {
                 val sessionsArray = json.optJSONArray("sessions") ?: JSONArray()
@@ -459,7 +466,26 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
     }
 
     override fun switchSession(sessionId: String) {
+        val ws = activeWebSocket
+        if (ws == null || !isHandshakeComplete) {
+            // Opening a session while still connecting used to drop the request
+            // silently, leaving the chat stuck on "No messages yet". Hold it and
+            // replay it once the handshake lands.
+            pendingSwitchSessionId = sessionId
+            return
+        }
+        pendingSwitchSessionId = null
+        sendSwitchSession(ws, sessionId)
+    }
+
+    private fun flushPendingSwitchSession() {
+        val sessionId = pendingSwitchSessionId ?: return
         val ws = activeWebSocket ?: return
+        pendingSwitchSessionId = null
+        sendSwitchSession(ws, sessionId)
+    }
+
+    private fun sendSwitchSession(ws: WebSocket, sessionId: String) {
         val payload = JSONObject().apply {
             put("t", "switch")
             put("sessionId", sessionId)
@@ -487,6 +513,7 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
         connectionGeneration++
         handshakeTimeoutJob?.cancel()
         handshakeTimeoutJob = null
+        pendingSwitchSessionId = null
 
         val socket = activeWebSocket
         activeWebSocket = null

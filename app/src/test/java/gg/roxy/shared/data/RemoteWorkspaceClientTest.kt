@@ -5,6 +5,7 @@ import gg.roxy.chatFullscreen.businessLogic.ToolCallType
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -344,6 +345,26 @@ class RemoteWorkspaceClientTest {
         client.disconnect()
 
         assertTrue(client.connectionState.value is RemoteConnectionState.Disconnected)
+    }
+
+    @Test
+    fun snapshotEmittedBeforeSubscriptionIsStillDelivered() = runBlocking {
+        val client = DefaultRemoteWorkspaceClient(MemoryRemoteStorage())
+
+        // Snapshot lands before anyone collects: this is the race that left the
+        // chat showing "No messages yet" despite having history.
+        client.handleIncomingMessage(
+            """{"t":"snapshot","sessionId":"s1","messages":[
+               {"id":"m1","role":"user","content":"hola"}]}"""
+        )
+
+        val event = withTimeout(2000) {
+            client.events.first { it is RemoteEvent.SnapshotReceived }
+        } as RemoteEvent.SnapshotReceived
+
+        assertEquals("s1", event.sessionId)
+        assertEquals(1, event.messages.size)
+        assertEquals("hola", event.messages[0].text)
     }
 
     @Test
