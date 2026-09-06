@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -30,6 +31,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -44,6 +48,8 @@ import gg.roxy.chatFullscreen.businessLogic.ToolCallType
 import gg.roxy.chatFullscreen.businessLogic.ToolCallUiModel
 import gg.roxy.shared.styles.RoxyTheme
 import gg.roxy.shared.styles.roxyColors
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 
 @Composable
 fun ChatFullScreen(
@@ -73,7 +79,51 @@ fun ChatFullScreen(
         )
         HorizontalDivider(color = colors.border)
 
+        val listState = rememberLazyListState()
+
+        // Opening a session must always land at the bottom. Keyed on the session
+        // rather than on the message list, because a snapshot that arrives after
+        // the cached content is structurally equal and would not retrigger it.
+        LaunchedEffect(uiState.sessionTitle, uiState.projectName) {
+            // Content streams in over several layout passes (markdown and code
+            // blocks resize once measured), so keep re-pinning until the total
+            // extent stops moving instead of scrolling on the first pass only.
+            snapshotFlow { listState.layoutInfo.totalItemsCount }
+                .filter { it > 0 }
+                .first()
+
+            var previous: Pair<Int, Int>? = null
+            repeat(MAX_SETTLE_FRAMES) {
+                val info = listState.layoutInfo
+                listState.scrollToItem(info.totalItemsCount - 1, scrollOffset = Int.MAX_VALUE)
+
+                val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()
+                val current = listState.layoutInfo.totalItemsCount to
+                    ((last?.offset ?: 0) + (last?.size ?: 0))
+                if (current == previous) return@LaunchedEffect
+                previous = current
+                withFrameNanos { }
+            }
+        }
+
+        // While streaming, follow the tail only if the user has not scrolled away.
+        LaunchedEffect(uiState.messages, uiState.toolCalls) {
+            // Read before suspending: layoutInfo still describes the pre-update
+            // layout, so this answers "was the user pinned to the bottom before
+            // this change?". Reading it after the new content is laid out would
+            // always report false and disable autoscroll entirely.
+            if (listState.canScrollForward) return@LaunchedEffect
+
+            val itemCount = snapshotFlow { listState.layoutInfo.totalItemsCount }
+                .filter { it > 0 }
+                .first()
+            // Large offset lands at the bottom of the last item even when it is
+            // taller than the viewport.
+            listState.scrollToItem(itemCount - 1, scrollOffset = Int.MAX_VALUE)
+        }
+
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth(),
@@ -316,6 +366,9 @@ fun ChatHeader(
         }
     }
 }
+
+/** Upper bound on layout passes waited for when pinning a freshly opened chat. */
+private const val MAX_SETTLE_FRAMES = 10
 
 private val ChatPreviewState = ChatFullScreenUiState(
     sessionTitle = "Remote Session",

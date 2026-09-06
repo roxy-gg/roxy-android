@@ -1,4 +1,4 @@
-package gg.roxy.mainFullScreen.components
+package gg.roxy.mainFullscreen.components
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
@@ -62,10 +62,10 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import gg.roxy.R
-import gg.roxy.mainFullScreen.businessLogic.ComputerUiModel
-import gg.roxy.mainFullScreen.businessLogic.MainFullScreenUiState
-import gg.roxy.mainFullScreen.businessLogic.ProjectUiModel
-import gg.roxy.mainFullScreen.businessLogic.SessionUiModel
+import gg.roxy.mainFullscreen.businessLogic.ComputerUiModel
+import gg.roxy.mainFullscreen.businessLogic.MainFullScreenUiState
+import gg.roxy.mainFullscreen.businessLogic.ProjectUiModel
+import gg.roxy.mainFullscreen.businessLogic.SessionUiModel
 import gg.roxy.shared.styles.RoxyMonoFontFamily
 import gg.roxy.shared.styles.RoxyTheme
 import gg.roxy.shared.styles.roxyColors

@@ -3,7 +3,9 @@ package gg.roxy
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import gg.roxy.chatFullscreen.components.ChatFullScreen
-import gg.roxy.mainFullScreen.components.MainFullScreen
+import gg.roxy.mainFullscreen.components.MainFullScreen
+import gg.roxy.shared.businessLogic.RoxyAppUiState
+import gg.roxy.shared.businessLogic.RoxyDestination
 
 @Composable
 fun RoxyApp(

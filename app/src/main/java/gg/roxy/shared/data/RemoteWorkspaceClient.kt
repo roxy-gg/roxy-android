@@ -1,5 +1,6 @@
-package gg.roxy.remote
+package gg.roxy.shared.data
 
+import android.util.Log
 import gg.roxy.chatFullscreen.businessLogic.ChatMessageUiModel
 import gg.roxy.chatFullscreen.businessLogic.ChatPartUiModel
 import gg.roxy.chatFullscreen.businessLogic.ToolCallStatus
@@ -11,6 +12,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -68,13 +71,25 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .build()
 
-    private var activeWebSocket: WebSocket? = null
-    private var pendingPin: String = ""
+    @Volatile private var activeWebSocket: WebSocket? = null
+    @Volatile private var handshakeTimeoutJob: Job? = null
+    @Volatile private var isHandshakeComplete = false
+
+    /** Session requested before the socket was ready; replayed after the handshake. */
+    @Volatile private var pendingSwitchSessionId: String? = null
+
+    /**
+     * Incremented on every connect/disconnect so that callbacks belonging to a
+     * superseded socket can detect they are stale and stop touching shared state.
+     */
+    @Volatile private var connectionGeneration = 0
 
     private val _connectionState = MutableStateFlow<RemoteConnectionState>(RemoteConnectionState.Disconnected)
     override val connectionState: StateFlow<RemoteConnectionState> = _connectionState.asStateFlow()
 
-    private val _events = MutableSharedFlow<RemoteEvent>(extraBufferCapacity = 64)
+    // replay = 1 so a snapshot emitted before the ViewModel subscribes is still
+    // delivered; without it the chat stays empty until the next remote event.
+    private val _events = MutableSharedFlow<RemoteEvent>(replay = 1, extraBufferCapacity = 64)
     override val events: SharedFlow<RemoteEvent> = _events.asSharedFlow()
 
     override fun connect(rawTokenOrUrl: String, pin: String) {
@@ -91,35 +106,102 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
         }
 
         disconnect()
-        pendingPin = cleanedPin
+        isHandshakeComplete = false
+        val generation = ++connectionGeneration
         _connectionState.value = RemoteConnectionState.Connecting
+
+        handshakeTimeoutJob = scope.launch {
+            delay(HANDSHAKE_TIMEOUT_MS)
+            if (!isHandshakeComplete) {
+                failConnection(
+                    "The PC did not respond. Check the PIN and that Roxy is running on your PC.",
+                    generation,
+                )
+            }
+        }
 
         val wsUrl = "wss://roxy.gg/api/remote/ws?token=${token}"
         val request = Request.Builder().url(wsUrl).build()
 
         activeWebSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                if (generation != connectionGeneration) return
                 val helloPayload = JSONObject().apply {
                     put("t", "hello")
-                    put("pin", pendingPin)
+                    put("pin", cleanedPin)
                 }
                 webSocket.send(helloPayload.toString())
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                if (generation != connectionGeneration) return
                 handleIncomingMessage(text, token, cleanedPin)
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                _connectionState.value = RemoteConnectionState.Error(
-                    t.localizedMessage ?: "Connection failure to PC relay"
-                )
+                Log.w(TAG, "WebSocket failure (HTTP ${response?.code})", t)
+                failConnection("Could not reach your PC. Check your connection.", generation)
+            }
+
+            // The peer closing first surfaces as onClosing, not onClosed: OkHttp only
+            // reports onClosed once we have sent our own close frame. Echo the close
+            // so a PIN rejection is reported immediately instead of waiting for the
+            // handshake timeout.
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                if (generation != connectionGeneration) return
+                try {
+                    webSocket.close(1000, null)
+                } catch (_: Exception) {}
+                handlePeerClose(reason, generation)
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                _connectionState.value = RemoteConnectionState.Disconnected
+                if (generation != connectionGeneration) return
+                handlePeerClose(reason, generation)
             }
         })
+    }
+
+    private fun handlePeerClose(reason: String, generation: Int) {
+        if (generation != connectionGeneration) return
+        if (!isHandshakeComplete) {
+            // `reason` is a protocol string (often the peer's own wording, e.g.
+            // "User disconnected"), so it is logged rather than shown to the user.
+            Log.w(TAG, "Pairing closed by peer before handshake: $reason")
+            failConnection(
+                "The PC rejected the connection. Verify the 6-digit PIN.",
+                generation,
+            )
+        } else {
+            handshakeTimeoutJob?.cancel()
+            handshakeTimeoutJob = null
+            isHandshakeComplete = false
+            activeWebSocket = null
+            connectionGeneration++
+            _connectionState.value = RemoteConnectionState.Disconnected
+        }
+    }
+
+    /**
+     * Only tears down shared state if [generation] still matches the live connection,
+     * so a superseded socket cannot kill the connection that replaced it.
+     */
+    private fun failConnection(message: String, generation: Int) {
+        if (generation != connectionGeneration) return
+        handshakeTimeoutJob?.cancel()
+        handshakeTimeoutJob = null
+        isHandshakeComplete = false
+
+        val doomedSocket = activeWebSocket
+        activeWebSocket = null
+        // Retire this generation before cancelling so the socket's own teardown
+        // callbacks are seen as stale and cannot reopen the connection.
+        connectionGeneration++
+        try {
+            doomedSocket?.cancel()
+        } catch (_: Exception) {}
+
+        _connectionState.value = RemoteConnectionState.Error(message)
     }
 
     internal fun handleIncomingMessage(text: String, token: String = "test-token", pin: String = "123456") {
@@ -131,12 +213,18 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
 
         when (json.optString("t")) {
             "hello-ok" -> {
+                handshakeTimeoutJob?.cancel()
+                isHandshakeComplete = true
                 storage.savedToken = token
                 storage.savedPin = pin
                 _connectionState.value = RemoteConnectionState.Connected()
+                flushPendingSwitchSession()
             }
             "paired" -> {
+                handshakeTimeoutJob?.cancel()
+                isHandshakeComplete = true
                 _connectionState.value = RemoteConnectionState.Connected()
+                flushPendingSwitchSession()
             }
             "sessions" -> {
                 val sessionsArray = json.optJSONArray("sessions") ?: JSONArray()
@@ -343,11 +431,17 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
             }
             "error" -> {
                 val msg = json.optString("message", "Unknown error from remote host")
-                scope.launch {
-                    _events.emit(RemoteEvent.ErrorReceived(msg))
+                if (!isHandshakeComplete) {
+                    failConnection(msg, connectionGeneration)
+                } else {
+                    scope.launch {
+                        _events.emit(RemoteEvent.ErrorReceived(msg))
+                    }
                 }
             }
             "bye" -> {
+                handshakeTimeoutJob?.cancel()
+                isHandshakeComplete = false
                 _connectionState.value = RemoteConnectionState.Disconnected
             }
         }
@@ -372,7 +466,26 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
     }
 
     override fun switchSession(sessionId: String) {
+        val ws = activeWebSocket
+        if (ws == null || !isHandshakeComplete) {
+            // Opening a session while still connecting used to drop the request
+            // silently, leaving the chat stuck on "No messages yet". Hold it and
+            // replay it once the handshake lands.
+            pendingSwitchSessionId = sessionId
+            return
+        }
+        pendingSwitchSessionId = null
+        sendSwitchSession(ws, sessionId)
+    }
+
+    private fun flushPendingSwitchSession() {
+        val sessionId = pendingSwitchSessionId ?: return
         val ws = activeWebSocket ?: return
+        pendingSwitchSessionId = null
+        sendSwitchSession(ws, sessionId)
+    }
+
+    private fun sendSwitchSession(ws: WebSocket, sessionId: String) {
         val payload = JSONObject().apply {
             put("t", "switch")
             put("sessionId", sessionId)
@@ -397,10 +510,29 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
     }
 
     override fun disconnect() {
-        try {
-            activeWebSocket?.close(1000, "User disconnected")
-        } catch (_: Exception) {}
+        connectionGeneration++
+        handshakeTimeoutJob?.cancel()
+        handshakeTimeoutJob = null
+        pendingSwitchSessionId = null
+
+        val socket = activeWebSocket
         activeWebSocket = null
+        try {
+            if (isHandshakeComplete) {
+                // Graceful close: the peer is live and will echo the close frame.
+                socket?.close(1000, "User disconnected")
+            } else {
+                // Never handshook, so the peer may never reply to a close frame.
+                // Cancel to release the socket immediately instead of leaking it.
+                socket?.cancel()
+            }
+        } catch (_: Exception) {}
+        isHandshakeComplete = false
         _connectionState.value = RemoteConnectionState.Disconnected
+    }
+
+    private companion object {
+        const val TAG = "RemoteWorkspace"
+        const val HANDSHAKE_TIMEOUT_MS = 15_000L
     }
 }

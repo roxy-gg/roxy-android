@@ -1,15 +1,17 @@
-package gg.roxy.remote
+package gg.roxy.shared.data
 
 import gg.roxy.chatFullscreen.businessLogic.ToolCallStatus
 import gg.roxy.chatFullscreen.businessLogic.ToolCallType
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -234,5 +236,144 @@ class RemoteWorkspaceClientTest {
         assertEquals(1, event.inFlightTools.size)
         assertEquals("call-live-1", event.inFlightTools[0].id)
         assertEquals(ToolCallStatus.Running, event.inFlightTools[0].status)
+    }
+
+    @Test
+    fun rejectsBlankTokenWithoutLeavingStateConnecting() {
+        val client = DefaultRemoteWorkspaceClient(MemoryRemoteStorage())
+
+        client.connect("", "123456")
+
+        val state = client.connectionState.value
+        assertTrue(state is RemoteConnectionState.Error)
+        assertEquals("Invalid token or link", (state as RemoteConnectionState.Error).message)
+    }
+
+    @Test
+    fun rejectsShortPinWithoutLeavingStateConnecting() {
+        val client = DefaultRemoteWorkspaceClient(MemoryRemoteStorage())
+
+        client.connect("guest_token_abc", "123")
+
+        val state = client.connectionState.value
+        assertTrue(state is RemoteConnectionState.Error)
+        assertEquals("PIN must be 6 digits", (state as RemoteConnectionState.Error).message)
+    }
+
+    @Test
+    fun serverErrorBeforeHandshakeSurfacesAsErrorState() {
+        val client = DefaultRemoteWorkspaceClient(MemoryRemoteStorage())
+
+        client.handleIncomingMessage("""{"t":"error","message":"Invalid PIN"}""")
+
+        // Must fail loudly: staying in Connecting is what used to hang the app
+        // forever on a wrong PIN.
+        val state = client.connectionState.value
+        assertTrue(state is RemoteConnectionState.Error)
+        assertEquals("Invalid PIN", (state as RemoteConnectionState.Error).message)
+    }
+
+    @Test
+    fun serverErrorAfterHandshakeKeepsConnectionAndEmitsEvent() = runBlocking {
+        val client = DefaultRemoteWorkspaceClient(MemoryRemoteStorage())
+
+        client.handleIncomingMessage("""{"t":"hello-ok"}""", "tok", "123456")
+        assertTrue(client.connectionState.value is RemoteConnectionState.Connected)
+
+        val deferred = CompletableDeferred<RemoteEvent>()
+        val job = launch(Dispatchers.IO) {
+            client.events.collect { deferred.complete(it) }
+        }
+        delay(50)
+
+        client.handleIncomingMessage("""{"t":"error","message":"Tool failed"}""")
+
+        val event = withTimeout(2000) { deferred.await() } as RemoteEvent.ErrorReceived
+        job.cancel()
+
+        assertEquals("Tool failed", event.message)
+        // An in-session error must not tear down an established connection.
+        assertTrue(client.connectionState.value is RemoteConnectionState.Connected)
+    }
+
+    @Test
+    fun helloOkPersistsCredentialsAndMarksConnected() {
+        val storage = MemoryRemoteStorage()
+        val client = DefaultRemoteWorkspaceClient(storage)
+
+        client.handleIncomingMessage("""{"t":"hello-ok"}""", "guest_token_xyz", "654321")
+
+        assertTrue(client.connectionState.value is RemoteConnectionState.Connected)
+        assertEquals("guest_token_xyz", storage.savedToken)
+        assertEquals("654321", storage.savedPin)
+    }
+
+    @Test
+    fun failedPairingDoesNotPersistCredentials() {
+        val storage = MemoryRemoteStorage()
+        val client = DefaultRemoteWorkspaceClient(storage)
+
+        client.handleIncomingMessage("""{"t":"error","message":"Invalid PIN"}""", "tok", "000000")
+
+        assertNull(storage.savedToken)
+        assertNull(storage.savedPin)
+    }
+
+    @Test
+    fun retryAfterFailedPairingReachesConnectingAgain() {
+        val client = DefaultRemoteWorkspaceClient(MemoryRemoteStorage())
+
+        client.handleIncomingMessage("""{"t":"error","message":"Invalid PIN"}""")
+        assertTrue(client.connectionState.value is RemoteConnectionState.Error)
+
+        // Correcting the PIN and reconnecting must leave the error behind; a stale
+        // listener used to knock this attempt straight back to Error.
+        client.connect("guest_token_abc", "654321")
+
+        assertTrue(client.connectionState.value is RemoteConnectionState.Connecting)
+
+        client.disconnect()
+    }
+
+    @Test
+    fun disconnectResetsStateToDisconnected() {
+        val client = DefaultRemoteWorkspaceClient(MemoryRemoteStorage())
+
+        client.handleIncomingMessage("""{"t":"hello-ok"}""", "tok", "123456")
+        assertTrue(client.connectionState.value is RemoteConnectionState.Connected)
+
+        client.disconnect()
+
+        assertTrue(client.connectionState.value is RemoteConnectionState.Disconnected)
+    }
+
+    @Test
+    fun snapshotEmittedBeforeSubscriptionIsStillDelivered() = runBlocking {
+        val client = DefaultRemoteWorkspaceClient(MemoryRemoteStorage())
+
+        // Snapshot lands before anyone collects: this is the race that left the
+        // chat showing "No messages yet" despite having history.
+        client.handleIncomingMessage(
+            """{"t":"snapshot","sessionId":"s1","messages":[
+               {"id":"m1","role":"user","content":"hola"}]}"""
+        )
+
+        val event = withTimeout(2000) {
+            client.events.first { it is RemoteEvent.SnapshotReceived }
+        } as RemoteEvent.SnapshotReceived
+
+        assertEquals("s1", event.sessionId)
+        assertEquals(1, event.messages.size)
+        assertEquals("hola", event.messages[0].text)
+    }
+
+    @Test
+    fun byeFrameMarksConnectionDisconnected() {
+        val client = DefaultRemoteWorkspaceClient(MemoryRemoteStorage())
+
+        client.handleIncomingMessage("""{"t":"hello-ok"}""", "tok", "123456")
+        client.handleIncomingMessage("""{"t":"bye"}""")
+
+        assertTrue(client.connectionState.value is RemoteConnectionState.Disconnected)
     }
 }

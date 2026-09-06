@@ -1,4 +1,4 @@
-package gg.roxy.remote
+package gg.roxy.shared.data
 
 sealed interface RemoteConnectionState {
     data object Disconnected : RemoteConnectionState

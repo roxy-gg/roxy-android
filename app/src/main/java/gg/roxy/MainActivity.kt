@@ -9,8 +9,9 @@ import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dagger.hilt.android.AndroidEntryPoint
-import gg.roxy.remote.PlayServicesRemoteQrScanner
-import gg.roxy.remote.RemoteQrScanner
+import gg.roxy.shared.businessLogic.RoxyAppViewModel
+import gg.roxy.shared.data.PlayServicesRemoteQrScanner
+import gg.roxy.shared.data.RemoteQrScanner
 import gg.roxy.shared.styles.RoxyTheme
 
 @AndroidEntryPoint

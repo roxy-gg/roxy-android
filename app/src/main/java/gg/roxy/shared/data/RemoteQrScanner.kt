@@ -1,4 +1,4 @@
-package gg.roxy.remote
+package gg.roxy.shared.data
 
 import android.content.Context
 import com.google.mlkit.vision.barcode.common.Barcode
