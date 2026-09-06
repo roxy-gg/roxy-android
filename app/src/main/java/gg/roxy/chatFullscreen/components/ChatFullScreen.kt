@@ -83,6 +83,13 @@ fun ChatFullScreen(
         // the post-layout item count instead of reading it here (it is 0 on first
         // render, and one item behind on later updates).
         LaunchedEffect(uiState.messages, uiState.toolCalls) {
+            // Read before suspending: layoutInfo is still the pre-update layout here,
+            // so this answers "was the user pinned to the bottom before this change?".
+            // Reading it after the new content is laid out would always report false
+            // and disable autoscroll entirely. It is also false on first render, which
+            // is what makes opening a chat jump to the latest message.
+            if (listState.canScrollForward) return@LaunchedEffect
+
             val itemCount = snapshotFlow { listState.layoutInfo.totalItemsCount }
                 .filter { it > 0 }
                 .first()
