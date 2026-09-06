@@ -32,6 +32,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -46,6 +47,8 @@ import gg.roxy.chatFullscreen.businessLogic.ToolCallType
 import gg.roxy.chatFullscreen.businessLogic.ToolCallUiModel
 import gg.roxy.shared.styles.RoxyTheme
 import gg.roxy.shared.styles.roxyColors
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 
 @Composable
 fun ChatFullScreen(
@@ -76,11 +79,16 @@ fun ChatFullScreen(
         HorizontalDivider(color = colors.border)
 
         val listState = rememberLazyListState()
+        // layoutInfo still holds the previous layout during composition, so wait for
+        // the post-layout item count instead of reading it here (it is 0 on first
+        // render, and one item behind on later updates).
         LaunchedEffect(uiState.messages, uiState.toolCalls) {
-            val itemCount = listState.layoutInfo.totalItemsCount
-            if (itemCount > 0) {
-                listState.scrollToItem(itemCount - 1)
-            }
+            val itemCount = snapshotFlow { listState.layoutInfo.totalItemsCount }
+                .filter { it > 0 }
+                .first()
+            // Large offset lands at the bottom of the last item even when it is
+            // taller than the viewport.
+            listState.scrollToItem(itemCount - 1, scrollOffset = Int.MAX_VALUE)
         }
 
         LazyColumn(
