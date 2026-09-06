@@ -1,4 +1,4 @@
-package gg.roxy.remote
+package gg.roxy.shared.data
 
 import gg.roxy.chatFullscreen.businessLogic.ToolCallStatus
 import gg.roxy.chatFullscreen.businessLogic.ToolCallType

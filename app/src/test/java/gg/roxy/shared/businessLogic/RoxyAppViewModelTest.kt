@@ -1,14 +1,14 @@
-package gg.roxy
+package gg.roxy.shared.businessLogic
 
 import gg.roxy.chatFullscreen.businessLogic.ChatMessageUiModel
 import gg.roxy.chatFullscreen.businessLogic.ToolCallStatus
 import gg.roxy.chatFullscreen.businessLogic.ToolCallType
 import gg.roxy.chatFullscreen.businessLogic.ToolCallUiModel
-import gg.roxy.remote.RemoteConnectionState
-import gg.roxy.remote.RemoteEvent
-import gg.roxy.remote.RemoteSessionInfo
-import gg.roxy.remote.RemoteStorage
-import gg.roxy.remote.RemoteWorkspaceClient
+import gg.roxy.shared.data.RemoteConnectionState
+import gg.roxy.shared.data.RemoteEvent
+import gg.roxy.shared.data.RemoteSessionInfo
+import gg.roxy.shared.data.RemoteStorage
+import gg.roxy.shared.data.RemoteWorkspaceClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow

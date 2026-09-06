@@ -1,6 +1,6 @@
 package gg.roxy
 
-import gg.roxy.remote.RemoteWorkspaceUtils
+import gg.roxy.shared.data.RemoteWorkspaceUtils
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull

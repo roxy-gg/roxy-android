@@ -1,4 +1,4 @@
-package gg.roxy
+package gg.roxy.shared.businessLogic
 
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
@@ -10,16 +10,16 @@ import gg.roxy.chatFullscreen.businessLogic.ChatPartUiModel
 import gg.roxy.chatFullscreen.businessLogic.ToolCallStatus
 import gg.roxy.chatFullscreen.businessLogic.ToolCallType
 import gg.roxy.chatFullscreen.businessLogic.ToolCallUiModel
-import gg.roxy.mainFullScreen.businessLogic.ComputerUiModel
-import gg.roxy.mainFullScreen.businessLogic.MainFullScreenUiState
-import gg.roxy.mainFullScreen.businessLogic.ProjectUiModel
-import gg.roxy.mainFullScreen.businessLogic.SessionUiModel
-import gg.roxy.remote.RemoteConnectionState
-import gg.roxy.remote.RemoteEvent
-import gg.roxy.remote.RemoteSessionInfo
-import gg.roxy.remote.RemoteStorage
-import gg.roxy.remote.RemoteWorkspaceClient
-import gg.roxy.remote.RemoteWorkspaceUtils
+import gg.roxy.mainFullscreen.businessLogic.ComputerUiModel
+import gg.roxy.mainFullscreen.businessLogic.MainFullScreenUiState
+import gg.roxy.mainFullscreen.businessLogic.ProjectUiModel
+import gg.roxy.mainFullscreen.businessLogic.SessionUiModel
+import gg.roxy.shared.data.RemoteConnectionState
+import gg.roxy.shared.data.RemoteEvent
+import gg.roxy.shared.data.RemoteSessionInfo
+import gg.roxy.shared.data.RemoteStorage
+import gg.roxy.shared.data.RemoteWorkspaceClient
+import gg.roxy.shared.data.RemoteWorkspaceUtils
 import java.util.UUID
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope

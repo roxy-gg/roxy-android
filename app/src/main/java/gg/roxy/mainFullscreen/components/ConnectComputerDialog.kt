@@ -1,4 +1,4 @@
-package gg.roxy.mainFullScreen.components
+package gg.roxy.mainFullscreen.components
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement

@@ -1,4 +1,4 @@
-package gg.roxy.mainFullScreen.components
+package gg.roxy.mainFullscreen.components
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
@@ -40,8 +40,8 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import gg.roxy.mainFullScreen.businessLogic.ProjectUiModel
-import gg.roxy.mainFullScreen.businessLogic.SessionUiModel
+import gg.roxy.mainFullscreen.businessLogic.ProjectUiModel
+import gg.roxy.mainFullscreen.businessLogic.SessionUiModel
 import gg.roxy.shared.styles.roxyColors
 
 @Composable

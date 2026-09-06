@@ -1,4 +1,4 @@
-package gg.roxy.mainFullScreen.components
+package gg.roxy.mainFullscreen.components
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
@@ -32,7 +32,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.unit.dp
-import gg.roxy.mainFullScreen.businessLogic.ComputerUiModel
+import gg.roxy.mainFullscreen.businessLogic.ComputerUiModel
 import gg.roxy.shared.styles.roxyColors
 
 @OptIn(ExperimentalMaterial3Api::class)

@@ -1,4 +1,4 @@
-package gg.roxy.mainFullScreen.businessLogic
+package gg.roxy.mainFullscreen.businessLogic
 
 import androidx.compose.runtime.Immutable
 

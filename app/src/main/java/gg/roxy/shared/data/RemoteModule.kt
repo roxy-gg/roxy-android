@@ -1,4 +1,4 @@
-package gg.roxy.remote
+package gg.roxy.shared.data
 
 import dagger.Binds
 import dagger.Module

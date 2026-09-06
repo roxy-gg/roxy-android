@@ -1,4 +1,4 @@
-package gg.roxy.remote
+package gg.roxy.shared.data
 
 import android.util.Log
 import gg.roxy.chatFullscreen.businessLogic.ChatMessageUiModel

@@ -1,4 +1,4 @@
-package gg.roxy.remote
+package gg.roxy.shared.data
 
 import android.content.Context
 import dagger.hilt.android.qualifiers.ApplicationContext
