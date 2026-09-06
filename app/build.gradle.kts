@@ -35,6 +35,12 @@ android {
     buildFeatures {
         compose = true
     }
+    testOptions {
+        unitTests {
+            // android.util.Log is not implemented in JVM tests; without this it throws.
+            isReturnDefaultValues = true
+        }
+    }
 }
 
 dependencies {
