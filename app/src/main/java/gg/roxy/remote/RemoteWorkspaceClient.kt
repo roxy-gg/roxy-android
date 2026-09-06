@@ -1,5 +1,6 @@
 package gg.roxy.remote
 
+import android.util.Log
 import gg.roxy.chatFullscreen.businessLogic.ChatMessageUiModel
 import gg.roxy.chatFullscreen.businessLogic.ChatPartUiModel
 import gg.roxy.chatFullscreen.businessLogic.ToolCallStatus
@@ -133,10 +134,8 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                failConnection(
-                    t.localizedMessage ?: "Connection failure to PC relay",
-                    generation,
-                )
+                Log.w(TAG, "WebSocket failure (HTTP ${response?.code})", t)
+                failConnection("Could not reach your PC. Check your connection.", generation)
             }
 
             // The peer closing first surfaces as onClosing, not onClosed: OkHttp only
@@ -161,9 +160,11 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
     private fun handlePeerClose(reason: String, generation: Int) {
         if (generation != connectionGeneration) return
         if (!isHandshakeComplete) {
+            // `reason` is a protocol string (often the peer's own wording, e.g.
+            // "User disconnected"), so it is logged rather than shown to the user.
+            Log.w(TAG, "Pairing closed by peer before handshake: $reason")
             failConnection(
-                reason.takeIf { it.isNotBlank() }
-                    ?: "The PC rejected the connection. Verify the 6-digit PIN.",
+                "The PC rejected the connection. Verify the 6-digit PIN.",
                 generation,
             )
         } else {
@@ -504,6 +505,7 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
     }
 
     private companion object {
+        const val TAG = "RemoteWorkspace"
         const val HANDSHAKE_TIMEOUT_MS = 15_000L
     }
 }
