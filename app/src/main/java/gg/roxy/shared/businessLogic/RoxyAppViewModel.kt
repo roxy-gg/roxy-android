@@ -144,6 +144,7 @@ class RoxyAppViewModel(
                                     projects = emptyList(),
                                 ),
                                 chat = state.chat.copy(
+                                    sessionId = "",
                                     sessionTitle = "",
                                     projectName = "",
                                     messages = emptyList(),
@@ -572,6 +573,7 @@ class RoxyAppViewModel(
                     connectionError = null,
                 ),
                 chat = state.chat.copy(
+                    sessionId = "",
                     sessionTitle = "",
                     projectName = "",
                     messages = emptyList(),
@@ -627,6 +629,7 @@ class RoxyAppViewModel(
                     isComputerMenuExpanded = false,
                 ),
                 chat = state.chat.copy(
+                    sessionId = sessionId,
                     sessionTitle = session.title,
                     projectName = project.name,
                     composerText = "",
@@ -755,6 +758,7 @@ private fun initialUiState(): RoxyAppUiState {
             projects = emptyList(),
         ),
         chat = ChatFullScreenUiState(
+            sessionId = "",
             sessionTitle = "",
             projectName = "",
             messages = emptyList(),
