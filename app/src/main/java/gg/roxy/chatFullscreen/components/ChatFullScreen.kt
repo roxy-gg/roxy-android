@@ -18,12 +18,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -36,7 +38,10 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -56,7 +61,7 @@ import gg.roxy.shared.styles.roxyColors
  * is what pins the viewport to the bottom of the conversation.
  */
 @Immutable
-private sealed interface ChatRow {
+internal sealed interface ChatRow {
     val key: String
 
     @Immutable
@@ -90,7 +95,7 @@ private sealed interface ChatRow {
  * equality keep unchanged rows from recomposing; if this ever profiles as allocation pressure, the
  * right fix is an incremental row cache keyed by message/part ids here.
  */
-private fun buildChatRows(
+internal fun buildChatRows(
     messages: List<ChatMessageUiModel>,
     toolCalls: List<ToolCallUiModel>,
 ): List<ChatRow> {
@@ -147,27 +152,40 @@ fun ChatFullScreen(
     }
     val isSessionEmpty = uiState.messages.isEmpty() && uiState.toolCalls.isEmpty()
 
-    val listState = rememberLazyListState()
+    val listState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
 
-    // The list is reversed, so the anchor item is the newest row: this reads as
-    // "the viewport is resting against the bottom edge".
-    val isAtNewestRow by remember(listState) {
+    // The list is reversed, so the anchor item is the newest row. A small
+    // threshold still counts as "at the bottom": a one-pixel offset after a fling
+    // or nested scroll should not disable the chat's follow-tail behaviour.
+    val isNearNewestRow by remember(listState) {
         derivedStateOf {
-            listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+            val viewportHeight = listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset
+            val followThreshold = (viewportHeight / 4).coerceAtLeast(1)
+            listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset < followThreshold
         }
     }
+    var hasUnseenNewestRow by rememberSaveable { mutableStateOf(false) }
 
     // Growing the newest row needs no scrolling at all -- it is the anchor, so
     // streamed markdown and tool output expand upwards while the bottom edge
     // stays put. Only an insertion has to be handled: rows carry stable keys, so
     // the anchor would otherwise follow the previously newest row and leave the
     // incoming one laid out below the viewport.
-    val newestRowKey = rows.firstOrNull()?.key
+    val newestRowKey = rows.firstOrNull { it !is ChatRow.OrphanTools }?.key
     LaunchedEffect(newestRowKey) {
-        // Effects run before this frame's measure pass, so isAtNewestRow still
+        // Effects run before this frame's measure pass, so isNearNewestRow still
         // describes the layout as it was before the row arrived: a user who had
-        // scrolled up into history is left alone.
-        if (isAtNewestRow) listState.requestScrollToItem(0)
+        // scrolled up into history is left alone and gets an explicit affordance
+        // instead of a forced jump.
+        if (isNearNewestRow) {
+            listState.requestScrollToItem(0)
+            hasUnseenNewestRow = false
+        } else if (newestRowKey != null) {
+            hasUnseenNewestRow = true
+        }
+    }
+    LaunchedEffect(isNearNewestRow) {
+        if (isNearNewestRow) hasUnseenNewestRow = false
     }
 
     Column(
@@ -216,25 +234,28 @@ fun ChatFullScreen(
                 }
             }
         } else {
-            LazyColumn(
-                state = listState,
+            Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
-                // Paints row 0 against the bottom edge and anchors scrolling
-                // there, which is what keeps the newest content on screen.
-                reverseLayout = true,
-                contentPadding = PaddingValues(start = 20.dp, top = 28.dp, end = 20.dp, bottom = 24.dp),
-                // Alignment.Bottom parks a transcript shorter than the viewport
-                // on the composer rather than under the header.
-                verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.Bottom),
-                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                items(rows, key = { it.key }, contentType = { it::class }) { row ->
-                    val rowModifier = Modifier
-                        .widthIn(max = 720.dp)
-                        .fillMaxWidth()
-                    when (row) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    // Paints row 0 against the bottom edge and anchors scrolling
+                    // there, which is what keeps the newest content on screen.
+                    reverseLayout = true,
+                    contentPadding = PaddingValues(start = 20.dp, top = 28.dp, end = 20.dp, bottom = 24.dp),
+                    // Alignment.Bottom parks a transcript shorter than the viewport
+                    // on the composer rather than under the header.
+                    verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.Bottom),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    items(rows, key = { it.key }, contentType = { it::class }) { row ->
+                        val rowModifier = Modifier
+                            .widthIn(max = 720.dp)
+                            .fillMaxWidth()
+                        when (row) {
                         is ChatRow.UserMessage -> Box(
                             modifier = rowModifier,
                             contentAlignment = Alignment.CenterEnd,
@@ -277,6 +298,24 @@ fun ChatFullScreen(
                     }
                 }
             }
+            if (hasUnseenNewestRow && !isNearNewestRow) {
+                Button(
+                    onClick = {
+                        listState.requestScrollToItem(0)
+                        hasUnseenNewestRow = false
+                    },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 16.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = colors.accent,
+                        contentColor = colors.bg,
+                    ),
+                ) {
+                    Text("Latest")
+                }
+            }
+        }
         }
 
         Box(
@@ -291,10 +330,12 @@ fun ChatFullScreen(
                 onTextChange = onComposerChange,
                 onSubmit = {
                     onComposerSubmit()
-                    // Sending always returns to the newest row, even from deep
-                    // in the history. The request applies to the next measure,
-                    // by which point the sent message is row 0.
+                    // User-sent messages are explicit navigation to the live
+                    // edge, even if the user was reading history. This is the
+                    // only forced jump; incoming messages use the follow-tail
+                    // policy above.
                     listState.requestScrollToItem(0)
+                    hasUnseenNewestRow = false
                 },
                 modifier = Modifier.widthIn(max = 720.dp),
             )
