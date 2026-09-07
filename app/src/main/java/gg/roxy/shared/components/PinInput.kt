@@ -31,7 +31,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.password
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import gg.roxy.shared.PAIRING_PIN_LENGTH
 import gg.roxy.shared.styles.RoxyMonoFontFamily
 import gg.roxy.shared.styles.RoxyTheme
 import gg.roxy.shared.styles.roxyColors
@@ -63,7 +64,7 @@ fun PinInput(
     value: String,
     onValueChange: (String) -> Unit,
     modifier: Modifier = Modifier,
-    length: Int = 6,
+    length: Int = PAIRING_PIN_LENGTH,
     enabled: Boolean = true,
     isError: Boolean = false,
     imeAction: ImeAction = ImeAction.Done,
@@ -99,7 +100,7 @@ fun PinInput(
             if (digits != value) onValueChange(digits)
         },
         modifier = modifier.semantics {
-            contentDescription = "$length digit PIN, ${value.length} entered"
+            password()
         },
         enabled = enabled,
         keyboardOptions = KeyboardOptions(

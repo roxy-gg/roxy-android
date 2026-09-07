@@ -32,18 +32,22 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import gg.roxy.shared.PAIRING_PIN_LENGTH
 import gg.roxy.shared.components.PinInput
 import gg.roxy.shared.styles.RoxyMonoFontFamily
 import gg.roxy.shared.styles.roxyColors
@@ -64,6 +68,7 @@ fun ConnectComputerDialog(
     var tokenInput by remember(initialTokenOrUrl) { mutableStateOf(initialTokenOrUrl) }
     var pinInput by remember(initialPin) { mutableStateOf(initialPin) }
     val keyboardController = LocalSoftwareKeyboardController.current
+    val pinFocusRequester = remember { FocusRequester() }
 
     // connectionError is a single field shared with QR scanning, so it also
     // carries failures that say nothing about the PIN. Stop marking the cells
@@ -72,7 +77,13 @@ fun ConnectComputerDialog(
     var pinEditedSinceError by remember(errorMessage) { mutableStateOf(false) }
     val isPinError = errorMessage != null && !pinEditedSinceError
 
-    val canConnect = tokenInput.isNotBlank() && pinInput.trim().length == 6 && !isConnecting
+    val canConnect = tokenInput.isNotBlank() && pinInput.trim().length == PAIRING_PIN_LENGTH && !isConnecting
+
+    LaunchedEffect(initialTokenOrUrl, initialPin) {
+        if (initialTokenOrUrl.isNotBlank() && initialPin.length < PAIRING_PIN_LENGTH) {
+            pinFocusRequester.requestFocus()
+        }
+    }
 
     Dialog(onDismissRequest = onDismiss) {
         Surface(
@@ -236,13 +247,14 @@ fun ConnectComputerDialog(
                             unfocusedTextColor = colors.text,
                         ),
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                        keyboardActions = KeyboardActions(onNext = { pinFocusRequester.requestFocus() }),
                     )
                 }
 
                 // Input: PIN
                 Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     Text(
-                        text = "6-DIGIT PIN",
+                        text = "$PAIRING_PIN_LENGTH-DIGIT PIN",
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontFamily = RoxyMonoFontFamily,
                             letterSpacing = 1.1.sp,
@@ -256,7 +268,9 @@ fun ConnectComputerDialog(
                             pinInput = it
                             pinEditedSinceError = true
                         },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusRequester(pinFocusRequester),
                         enabled = !isConnecting,
                         isError = isPinError,
                         keyboardActions = KeyboardActions(
