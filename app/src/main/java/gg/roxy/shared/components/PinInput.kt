@@ -22,7 +22,9 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -70,10 +72,20 @@ fun PinInput(
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
 
-    // Rebuilt on every recomposition with the caret pinned past the last digit,
-    // so a tap on any box cannot drop the caret into the middle of the PIN and
-    // desynchronise typing from the box the user is looking at.
-    val fieldValue = TextFieldValue(text = value, selection = TextRange(value.length))
+    // Held locally because the field is fully controlled: its internal buffer
+    // only follows this value on recomposition. Rejected input (a 7th digit, or
+    // pasted letters) leaves `value` unchanged, so relying on the hoisted state
+    // alone would skip that recomposition and let the buffer keep characters
+    // the PIN never accepted -- which then need an extra backspace to clear.
+    var fieldValue by remember {
+        mutableStateOf(TextFieldValue(text = value, selection = TextRange(value.length)))
+    }
+    // Keeps the field in step when the PIN is changed from the outside, and
+    // pins the caret past the last digit so a tap on any box cannot drop it
+    // mid-PIN and desynchronise typing from the box the user is looking at.
+    if (fieldValue.text != value) {
+        fieldValue = TextFieldValue(text = value, selection = TextRange(value.length))
+    }
 
     BasicTextField(
         value = fieldValue,
@@ -81,6 +93,9 @@ fun PinInput(
             // Filtering here rather than on the keyboard type also covers paste
             // and autofill, which happily deliver letters and spaces.
             val digits = new.text.filter(Char::isDigit).take(length)
+            // Assigned unconditionally, so the field is corrected even when the
+            // filtered result matches the current PIN.
+            fieldValue = TextFieldValue(text = digits, selection = TextRange(digits.length))
             if (digits != value) onValueChange(digits)
         },
         modifier = modifier.semantics {
