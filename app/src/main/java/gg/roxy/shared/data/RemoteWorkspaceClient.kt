@@ -15,11 +15,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
@@ -50,11 +52,12 @@ sealed interface RemoteEvent {
         val inFlightTools: List<ToolCallUiModel> = emptyList(),
     ) : RemoteEvent
     data class ErrorReceived(val message: String) : RemoteEvent
+    data class QueueChanged(val sessionId: String, val count: Int) : RemoteEvent
 }
 
 interface RemoteWorkspaceClient {
     val connectionState: StateFlow<RemoteConnectionState>
-    val events: SharedFlow<RemoteEvent>
+    val events: Flow<RemoteEvent>
     fun connect(rawTokenOrUrl: String, pin: String)
     /** True means queued on the socket, not acknowledged by the host. */
     fun sendPrompt(text: String): Boolean
@@ -92,8 +95,27 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
 
     // replay = 1 so a snapshot emitted before the ViewModel subscribes is still
     // delivered; without it the chat stays empty until the next remote event.
-    private val _events = MutableSharedFlow<RemoteEvent>(replay = 1, extraBufferCapacity = 64)
-    override val events: SharedFlow<RemoteEvent> = _events.asSharedFlow()
+    private data class QueuedEvent(val generation: Int, val event: RemoteEvent)
+    private val _events = MutableSharedFlow<QueuedEvent>(replay = 1, extraBufferCapacity = 64)
+    override val events: Flow<RemoteEvent> = _events
+        .filter { it.generation == connectionGeneration }
+        .map { it.event }
+    private val eventQueue = Channel<QueuedEvent>(capacity = 256)
+
+    init {
+        scope.launch {
+            for (queued in eventQueue) {
+                if (queued.generation == connectionGeneration) _events.emit(queued)
+            }
+        }
+    }
+
+    private fun publish(event: RemoteEvent) {
+        val generation = connectionGeneration
+        if (!eventQueue.trySend(QueuedEvent(generation, event)).isSuccess) {
+            failConnection("Could not keep up with PC updates. Reconnect to refresh the conversation.", generation)
+        }
+    }
 
     override fun connect(rawTokenOrUrl: String, pin: String) {
         val token = RemoteWorkspaceUtils.extractGuestToken(rawTokenOrUrl)
@@ -246,9 +268,7 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
                         )
                     )
                 }
-                scope.launch {
-                    _events.emit(RemoteEvent.SessionsReceived(list, currentId))
-                }
+                publish(RemoteEvent.SessionsReceived(list, currentId))
             }
             "snapshot" -> {
                 val sessionId = json.optString("sessionId", "")
@@ -339,9 +359,7 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
                     }
                 }
 
-                scope.launch {
-                    _events.emit(RemoteEvent.SnapshotReceived(sessionId, messagesList, toolsList))
-                }
+                publish(RemoteEvent.SnapshotReceived(sessionId, messagesList, toolsList))
             }
             "delta" -> {
                 val sessionId = json.optString("sessionId", "")
@@ -350,33 +368,25 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
                     "text" -> {
                         val delta = eventObj.optString("delta", "")
                         if (delta.isNotEmpty()) {
-                            scope.launch {
-                                _events.emit(RemoteEvent.TextDelta(sessionId, delta))
-                            }
+                            publish(RemoteEvent.TextDelta(sessionId, delta))
                         }
                     }
                     "tool-start" -> {
                         val callId = eventObj.optString("callId", UUID.randomUUID().toString())
                         val tool = eventObj.optString("tool", "tool")
                         val title = eventObj.optString("title", tool)
-                        scope.launch {
-                            _events.emit(RemoteEvent.ToolStarted(sessionId, callId, tool, title))
-                        }
+                        publish(RemoteEvent.ToolStarted(sessionId, callId, tool, title))
                     }
                     "tool-delta" -> {
                         val callId = eventObj.optString("callId", "")
                         val chunk = eventObj.optString("chunk", "")
-                        scope.launch {
-                            _events.emit(RemoteEvent.ToolDelta(sessionId, callId, chunk))
-                        }
+                        publish(RemoteEvent.ToolDelta(sessionId, callId, chunk))
                     }
                     "tool-end" -> {
                         val callId = eventObj.optString("callId", "")
                         val output = eventObj.optString("output", "")
                         val ok = eventObj.optBoolean("ok", true)
-                        scope.launch {
-                            _events.emit(RemoteEvent.ToolEnded(sessionId, callId, output, ok))
-                        }
+                        publish(RemoteEvent.ToolEnded(sessionId, callId, output, ok))
                     }
                 }
             }
@@ -431,13 +441,12 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
                     }
                 }
 
-                scope.launch {
-                    _events.emit(
+                publish(
                         RemoteEvent.TurnChanged(
                             sessionId = sessionId,
                             isRunning = isRunning,
                             userText = userText,
-                            inFlightText = textParts.takeIf { it.isNotEmpty() }?.joinToString("\n\n"),
+                            inFlightText = textParts.takeIf { it.isNotEmpty()?.joinToString("\n\n"),
                             inFlightParts = inFlightParts,
                             inFlightTools = inFlightTools,
                         )
@@ -449,15 +458,16 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
                 if (!isHandshakeComplete) {
                     failConnection(msg, connectionGeneration)
                 } else {
-                    scope.launch {
-                        _events.emit(RemoteEvent.ErrorReceived(msg))
-                    }
+                    publish(RemoteEvent.ErrorReceived(msg))
                 }
             }
+            "queue" -> publish(RemoteEvent.QueueChanged(
+                sessionId = json.optString("sessionId", ""),
+                count = json.optJSONArray("items")?.length() ?: 0,
+            ))
+            "host-offline" -> failConnection("Your PC went offline. Reconnect when Roxy is available again.", connectionGeneration)
             "bye" -> {
-                handshakeTimeoutJob?.cancel()
-                isHandshakeComplete = false
-                _connectionState.value = RemoteConnectionState.Disconnected
+                disconnect()
             }
         }
     }

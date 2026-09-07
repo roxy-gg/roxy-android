@@ -24,6 +24,8 @@ import gg.roxy.shared.data.RemoteWorkspaceUtils
 import java.util.UUID
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -63,12 +65,19 @@ class RoxyAppViewModel(
 
     private var activeSessionId: String? = null
     private var pairingToken: String? = storage.savedToken
+    private val snapshotsReceived = mutableSetOf<String>()
+    private val turnsReceived = mutableSetOf<String>()
+    private var syncTimeoutJob: Job? = null
+    private val responseTimeoutJobs = mutableMapOf<String, Job>()
 
     private data class SessionChatCache(
         val messages: List<ChatMessageUiModel> = emptyList(),
         val toolCalls: List<ToolCallUiModel> = emptyList(),
         val isRunning: Boolean = false,
         val draft: String = "",
+        val pendingPrompt: ChatMessageUiModel? = null,
+        val queuedPromptCount: Int = 0,
+        val errorMessage: String? = null,
     )
 
     private val sessionCache = mutableMapOf<String, SessionChatCache>()
@@ -85,11 +94,18 @@ class RoxyAppViewModel(
     private fun observeRemote() {
         scope.launch {
             remoteClient.connectionState.collect { connectionState ->
+                if (connectionState !is RemoteConnectionState.Connected) {
+                    snapshotsReceived.clear()
+                    turnsReceived.clear()
+                    syncTimeoutJob?.cancel()
+                    responseTimeoutJobs.values.forEach { it.cancel() }
+                    responseTimeoutJobs.clear()
+                }
                 _uiState.update { state ->
                     when (connectionState) {
                         is RemoteConnectionState.Connecting -> {
                             state.copy(
-                                chat = state.chat.copy(isConnected = false, isConnecting = true, errorMessage = null),
+                                chat = state.chat.copy(isConnected = false, isConnecting = true, isSessionReady = false, errorMessage = null),
                                 main = state.main.copy(
                                     isConnecting = true,
                                     connectionError = null,
@@ -123,6 +139,7 @@ class RoxyAppViewModel(
                             state.copy(
                                 chat = state.chat.copy(
                                     isConnected = false,
+                                    isSessionReady = false,
                                     isConnecting = false,
                                     isRunning = false,
                                     isSyncing = false,
@@ -153,6 +170,7 @@ class RoxyAppViewModel(
                                 ),
                                 chat = state.chat.copy(
                                     isConnected = false,
+                                    isSessionReady = false,
                                     isConnecting = false,
                                     isRunning = false,
                                     isSyncing = false,
@@ -164,7 +182,7 @@ class RoxyAppViewModel(
                 }
                 if (connectionState is RemoteConnectionState.Connected) {
                     activeSessionId?.let { sessionId ->
-                        _uiState.update { it.copy(chat = it.chat.copy(isSyncing = true)) }
+                        beginSessionSync(sessionId)
                         remoteClient.switchSession(sessionId)
                     }
                 }
@@ -187,6 +205,7 @@ class RoxyAppViewModel(
                 }
             }
             is RemoteEvent.SnapshotReceived -> {
+                snapshotsReceived.add(event.sessionId)
                 val current = sessionCache[event.sessionId] ?: SessionChatCache()
                 val allTools = if (event.tools.isNotEmpty()) {
                     event.tools
@@ -196,6 +215,7 @@ class RoxyAppViewModel(
                 sessionCache[event.sessionId] = current.copy(
                     messages = event.messages,
                     toolCalls = allTools,
+                    pendingPrompt = null,
                 )
 
                 if (activeSessionId == null || activeSessionId == event.sessionId) {
@@ -208,6 +228,8 @@ class RoxyAppViewModel(
                                 messages = event.messages,
                                 toolCalls = allTools,
                                 isSyncing = false,
+                                isSessionReady = isSessionReady(event.sessionId),
+                                isAwaitingResponse = false,
                             )
                         )
                     }
@@ -376,8 +398,15 @@ class RoxyAppViewModel(
                 }
             }
             is RemoteEvent.TurnChanged -> {
+                turnsReceived.add(event.sessionId)
                 val current = sessionCache[event.sessionId] ?: SessionChatCache()
                 val currentMessages = current.messages.toMutableList()
+                if (event.isRunning && current.pendingPrompt != null && current.queuedPromptCount == 0 && event.userText == null) {
+                    currentMessages.add(current.pendingPrompt)
+                }
+                if (event.isRunning && (event.userText == current.pendingPrompt?.text || current.queuedPromptCount == 0)) {
+                    responseTimeoutJobs.remove(event.sessionId)?.cancel()
+                }
                 if (event.userText != null && (currentMessages.isEmpty() || currentMessages.last().text != event.userText)) {
                     currentMessages.add(
                         ChatMessageUiModel(
@@ -442,6 +471,7 @@ class RoxyAppViewModel(
                     isRunning = event.isRunning,
                     messages = currentMessages,
                     toolCalls = currentTools,
+                    pendingPrompt = if (event.isRunning && (event.userText == current.pendingPrompt?.text || current.queuedPromptCount == 0)) null else current.pendingPrompt,
                 )
 
                 if (activeSessionId == null || activeSessionId == event.sessionId) {
@@ -451,17 +481,52 @@ class RoxyAppViewModel(
                                 isRunning = event.isRunning,
                                 messages = currentMessages,
                                 toolCalls = currentTools,
+                                isSessionReady = isSessionReady(event.sessionId) && state.chat.errorMessage == null,
+                                isAwaitingResponse = sessionCache[event.sessionId]?.pendingPrompt != null,
                             )
                         )
                     }
                 }
             }
             is RemoteEvent.ErrorReceived -> {
+                val sessionId = activeSessionId
+                sessionId?.let {
+                    val current = sessionCache[it] ?: SessionChatCache()
+                    sessionCache[it] = current.copy(errorMessage = event.message, pendingPrompt = null)
+                    responseTimeoutJobs.remove(it)?.cancel()
+                }
                 _uiState.update { state ->
                     state.copy(
-                        main = state.main.copy(connectionError = event.message)
+                        main = state.main.copy(connectionError = event.message),
+                        chat = state.chat.copy(errorMessage = event.message, isSessionReady = false, isSyncing = false, isAwaitingResponse = false),
                     )
                 }
+            }
+            is RemoteEvent.QueueChanged -> {
+                val current = sessionCache[event.sessionId] ?: SessionChatCache()
+                sessionCache[event.sessionId] = current.copy(queuedPromptCount = event.count)
+                if (event.count > 0) responseTimeoutJobs.remove(event.sessionId)?.cancel()
+                if (activeSessionId == event.sessionId) {
+                    _uiState.update { it.copy(chat = it.chat.copy(queuedPromptCount = event.count)) }
+                }
+            }
+        }
+    }
+
+    private fun isSessionReady(sessionId: String): Boolean =
+        sessionId in snapshotsReceived && sessionId in turnsReceived
+
+    private fun beginSessionSync(sessionId: String) {
+        snapshotsReceived.remove(sessionId)
+        turnsReceived.remove(sessionId)
+        val cached = sessionCache[sessionId] ?: SessionChatCache()
+        sessionCache[sessionId] = cached.copy(errorMessage = null)
+        _uiState.update { it.copy(chat = it.chat.copy(isSyncing = true, isSessionReady = false, errorMessage = null)) }
+        syncTimeoutJob?.cancel()
+        syncTimeoutJob = scope.launch {
+            delay(15_000)
+            if (activeSessionId == sessionId && !isSessionReady(sessionId)) {
+                _uiState.update { it.copy(chat = it.chat.copy(isSyncing = false, errorMessage = "Could not refresh this session. Try refreshing again.")) }
             }
         }
     }
@@ -580,6 +645,8 @@ class RoxyAppViewModel(
         if (token != pairingToken) {
             sessionCache.clear()
             activeSessionId = null
+            snapshotsReceived.clear()
+            turnsReceived.clear()
             _uiState.update { it.copy(destination = RoxyDestination.Main, chat = initialUiState().chat) }
         }
         pairingToken = token
@@ -588,6 +655,12 @@ class RoxyAppViewModel(
 
     fun reconnectRemote() {
         if (_uiState.value.chat.isConnecting) return
+        if (remoteClient.connectionState.value is RemoteConnectionState.Connected && activeSessionId != null) {
+            val sessionId = activeSessionId!!
+            beginSessionSync(sessionId)
+            remoteClient.switchSession(sessionId)
+            return
+        }
         val token = storage.savedToken
         val pin = storage.savedPin
         if (token.isNullOrBlank() || pin.isNullOrBlank()) {
@@ -645,8 +718,9 @@ class RoxyAppViewModel(
     }
 
     fun openSession(sessionId: String) {
+        if (_uiState.value.main.projects.none { project -> project.sessions.any { it.id == sessionId } }) return
         activeSessionId = sessionId
-        remoteClient.switchSession(sessionId)
+        beginSessionSync(sessionId)
 
         val cached = sessionCache[sessionId]
         val hasCache = cached != null && (cached.messages.isNotEmpty() || cached.toolCalls.isNotEmpty())
@@ -673,11 +747,14 @@ class RoxyAppViewModel(
                     sessionTitle = session.title,
                     projectName = project.name,
                     composerText = cached?.draft ?: "",
-                    errorMessage = null,
+                    errorMessage = cached?.errorMessage,
                     messages = cached?.messages ?: emptyList(),
                     toolCalls = cached?.toolCalls ?: emptyList(),
                     isRunning = cached?.isRunning ?: false,
                     isSyncing = !hasCache,
+                    isSessionReady = false,
+                    queuedPromptCount = cached?.queuedPromptCount ?: 0,
+                    isAwaitingResponse = cached?.pendingPrompt != null,
                 ),
             )
         }
@@ -692,6 +769,7 @@ class RoxyAppViewModel(
             val cached = sessionCache[sessionId] ?: SessionChatCache()
             sessionCache[sessionId] = cached.copy(draft = text)
         }
+        remoteClient.switchSession(sessionId)
         _uiState.update { state ->
             state.copy(chat = state.chat.copy(composerText = text))
         }
@@ -717,8 +795,7 @@ class RoxyAppViewModel(
             state.copy(
                 chat = state.chat.copy(
                     composerText = "",
-                    messages = state.chat.messages + userMessage,
-                    isRunning = true,
+                    isAwaitingResponse = true,
                     errorMessage = null,
                 )
             )
@@ -726,10 +803,19 @@ class RoxyAppViewModel(
 
         val cached = sessionCache[activeId] ?: SessionChatCache()
         sessionCache[activeId] = cached.copy(
-            messages = cached.messages + userMessage,
-            isRunning = true,
+            pendingPrompt = userMessage,
             draft = "",
         )
+        responseTimeoutJobs[activeId] = scope.launch {
+            delay(15_000)
+            if (sessionCache[activeId]?.pendingPrompt?.id == userMessage.id) {
+                val message = "Your PC has not confirmed this message. Refresh the session before sending it again."
+                sessionCache[activeId] = sessionCache.getValue(activeId).copy(errorMessage = message)
+                if (activeSessionId == activeId) {
+                    _uiState.update { it.copy(chat = it.chat.copy(errorMessage = message, isSessionReady = false)) }
+                }
+            }
+        }
     }
 
     fun toggleToolCall(toolCallId: String) {

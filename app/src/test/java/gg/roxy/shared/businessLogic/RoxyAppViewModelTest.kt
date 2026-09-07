@@ -131,6 +131,7 @@ class RoxyAppViewModelTest {
         val viewModel = createViewModel(client = client)
         client.connect("tok", "123456")
         client.fakeEvents.tryEmit(RemoteEvent.SnapshotReceived("sess-1", emptyList(), emptyList()))
+        client.fakeEvents.tryEmit(RemoteEvent.TurnChanged("sess-1", false))
 
         client.fakeEvents.tryEmit(
             RemoteEvent.ToolStarted(
@@ -533,6 +534,7 @@ class RoxyAppViewModelTest {
         val viewModel = createViewModel(client)
         client.connect("tok", "123456")
         client.fakeEvents.tryEmit(RemoteEvent.SnapshotReceived("sess-1", emptyList(), emptyList()))
+        client.fakeEvents.tryEmit(RemoteEvent.TurnChanged("sess-1", false))
         return viewModel
     }
 

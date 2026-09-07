@@ -22,6 +22,9 @@ fun ChatStatusBanner(state: ChatFullScreenUiState, onReconnect: () -> Unit) {
         state.isConnecting -> "Reconnecting to your PC..."
         state.errorMessage != null -> state.errorMessage
         !state.isConnected -> "Your PC is disconnected. Your draft is saved."
+        state.queuedPromptCount > 0 -> "Your PC has ${state.queuedPromptCount} queued message(s). Wait for them to finish."
+        state.isAwaitingResponse -> "Waiting for your PC to confirm the message..."
+        !state.isSessionReady -> "Refreshing this session..."
         else -> return
     }
     val colors = MaterialTheme.roxyColors
@@ -33,8 +36,8 @@ fun ChatStatusBanner(state: ChatFullScreenUiState, onReconnect: () -> Unit) {
                 color = colors.text,
                 modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
             )
-            if (!state.isConnecting) {
-                TextButton(onClick = onReconnect) { Text("Reconnect") }
+            if (!state.isConnecting && (!state.isConnected || state.errorMessage != null)) {
+                TextButton(onClick = onReconnect) { Text(if (state.isConnected) "Refresh session" else "Reconnect") }
             }
         }
     }
