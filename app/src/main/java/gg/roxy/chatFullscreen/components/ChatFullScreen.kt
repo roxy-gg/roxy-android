@@ -81,12 +81,21 @@ private sealed interface ChatRow {
     }
 }
 
-/** Flattens the transcript into newest-first order, ready for [LazyColumn]'s `reverseLayout`. */
+/**
+ * Flattens the transcript into newest-first order, ready for [LazyColumn]'s `reverseLayout`.
+ *
+ * This is rebuilt when streaming changes the messages list. That is still kept in the UI layer:
+ * these rows are list presentation state, and moving the same O(n) walk into the ViewModel would
+ * couple business state to composable row shapes without reducing the work. Stable keys and value
+ * equality keep unchanged rows from recomposing; if this ever profiles as allocation pressure, the
+ * right fix is an incremental row cache keyed by message/part ids here.
+ */
 private fun buildChatRows(
     messages: List<ChatMessageUiModel>,
     toolCalls: List<ToolCallUiModel>,
 ): List<ChatRow> {
     val rows = mutableListOf<ChatRow>()
+    val renderedToolIds = if (toolCalls.isEmpty()) null else mutableSetOf<String>()
 
     messages.forEach { message ->
         when {
@@ -96,7 +105,10 @@ private fun buildChatRows(
                 rows += when (part) {
                     is ChatPartUiModel.Text -> ChatRow.Markdown(part.id, part.text)
                     is ChatPartUiModel.Reasoning -> ChatRow.Reasoning(part)
-                    is ChatPartUiModel.Tool -> ChatRow.Tool(part.tool)
+                    is ChatPartUiModel.Tool -> {
+                        renderedToolIds?.add(part.tool.id)
+                        ChatRow.Tool(part.tool)
+                    }
                 }
             }
             message.text.isNotBlank() -> rows += ChatRow.Markdown(message.id, message.text)
@@ -109,9 +121,10 @@ private fun buildChatRows(
     // because their key is constant the newest key would never change again: an
     // incoming message would not trigger the pin, and sending would scroll to
     // the tool pile rather than the sent message.
-    val renderedToolIds = rows.filterIsInstance<ChatRow.Tool>().mapTo(mutableSetOf()) { it.tool.id }
-    val orphanTools = toolCalls.filterNot { it.id in renderedToolIds }
-    if (orphanTools.isNotEmpty()) rows.add(0, ChatRow.OrphanTools(orphanTools))
+    renderedToolIds?.let { ids ->
+        val orphanTools = toolCalls.filterNot { it.id in ids }
+        if (orphanTools.isNotEmpty()) rows.add(0, ChatRow.OrphanTools(orphanTools))
+    }
 
     rows.reverse()
     return rows
