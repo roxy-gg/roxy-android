@@ -132,6 +132,7 @@ fun ChatFullScreen(
     val rows = remember(uiState.messages, uiState.toolCalls) {
         buildChatRows(uiState.messages, uiState.toolCalls)
     }
+    val isSessionEmpty = uiState.messages.isEmpty() && uiState.toolCalls.isEmpty()
 
     val listState = rememberLazyListState()
 
@@ -172,7 +173,7 @@ fun ChatFullScreen(
         )
         HorizontalDivider(color = colors.border)
 
-        if (rows.isEmpty()) {
+        if (isSessionEmpty) {
             Box(
                 modifier = Modifier
                     .weight(1f)
