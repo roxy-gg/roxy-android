@@ -156,8 +156,10 @@ private fun PinCell(
 
     val borderColor by animateColorAsState(
         targetValue = when {
-            isError -> colors.danger
+            // The active cell keeps its highlight even while the field is in
+            // error, so the entry point stays visible during a retry.
             isActive -> colors.accent
+            isError -> colors.danger
             digit != null -> colors.edgeStrong
             else -> colors.edge
         },

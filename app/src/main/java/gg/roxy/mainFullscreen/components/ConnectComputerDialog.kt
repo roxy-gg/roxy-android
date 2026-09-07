@@ -65,6 +65,13 @@ fun ConnectComputerDialog(
     var pinInput by remember(initialPin) { mutableStateOf(initialPin) }
     val keyboardController = LocalSoftwareKeyboardController.current
 
+    // connectionError is a single field shared with QR scanning, so it also
+    // carries failures that say nothing about the PIN. Stop marking the cells
+    // once the PIN is edited: the banner still shows the message, but the
+    // cells stop claiming the digits are at fault.
+    var pinEditedSinceError by remember(errorMessage) { mutableStateOf(false) }
+    val isPinError = errorMessage != null && !pinEditedSinceError
+
     val canConnect = tokenInput.isNotBlank() && pinInput.trim().length == 6 && !isConnecting
 
     Dialog(onDismissRequest = onDismiss) {
@@ -245,10 +252,13 @@ fun ConnectComputerDialog(
                     )
                     PinInput(
                         value = pinInput,
-                        onValueChange = { pinInput = it },
+                        onValueChange = {
+                            pinInput = it
+                            pinEditedSinceError = true
+                        },
                         modifier = Modifier.fillMaxWidth(),
                         enabled = !isConnecting,
-                        isError = errorMessage != null,
+                        isError = isPinError,
                         keyboardActions = KeyboardActions(
                             onDone = {
                                 keyboardController?.hide()
