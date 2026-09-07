@@ -14,6 +14,7 @@ import gg.roxy.mainFullscreen.businessLogic.ComputerUiModel
 import gg.roxy.mainFullscreen.businessLogic.MainFullScreenUiState
 import gg.roxy.mainFullscreen.businessLogic.ProjectUiModel
 import gg.roxy.mainFullscreen.businessLogic.SessionUiModel
+import gg.roxy.shared.PAIRING_PIN_LENGTH
 import gg.roxy.shared.data.RemoteConnectionState
 import gg.roxy.shared.data.RemoteEvent
 import gg.roxy.shared.data.RemoteSessionInfo
@@ -374,12 +375,11 @@ class RoxyAppViewModel(
                     )
                 }
 
-                if (event.inFlightTools.isNotEmpty() || event.inFlightText != null) {
-                    // The turn streams as a whole message per event, so the row
-                    // keys have to be derived from the message that owns them.
-                    // A fresh id per event would rebuild the streaming row on
-                    // every chunk, discarding its layout state and making the
-                    // list treat it as a removal plus an insertion.
+                if (event.inFlightParts.isNotEmpty() || event.inFlightTools.isNotEmpty() || event.inFlightText != null) {
+                    // Row keys have to be derived from the message that owns the
+                    // turn. A fresh id per event would rebuild streaming rows on
+                    // every chunk, discarding layout state and making the list
+                    // treat the update as a removal plus an insertion.
                     val isNewTurn = currentMessages.isEmpty() || currentMessages.last().isUser
                     val turnId = if (isNewTurn) {
                         UUID.randomUUID().toString()
@@ -387,20 +387,21 @@ class RoxyAppViewModel(
                         currentMessages.last().id
                     }
 
-                    val inFlightParts = mutableListOf<ChatPartUiModel>()
-                    event.inFlightTools.forEach { tool ->
-                        inFlightParts.add(ChatPartUiModel.Tool(tool))
-                    }
-                    if (event.inFlightText != null) {
-                        // Matches the shape the snapshot parser emits, so the key
-                        // survives the streamed turn being replaced by its
-                        // server-sent version once the turn closes.
-                        inFlightParts.add(
-                            ChatPartUiModel.Text(
-                                id = "$turnId-text-0",
-                                text = event.inFlightText,
-                            )
-                        )
+                    val inFlightParts = if (event.inFlightParts.isNotEmpty()) {
+                        event.inFlightParts.map { part ->
+                            when (part) {
+                                is ChatPartUiModel.Text -> part.copy(id = "$turnId-text-${sourcePartIndex(part.id)}")
+                                is ChatPartUiModel.Reasoning -> part.copy(id = "$turnId-reasoning-${sourcePartIndex(part.id)}")
+                                is ChatPartUiModel.Tool -> part
+                            }
+                        }
+                    } else {
+                        buildList {
+                            event.inFlightTools.forEach { tool -> add(ChatPartUiModel.Tool(tool)) }
+                            event.inFlightText?.let { text ->
+                                add(ChatPartUiModel.Text(id = "$turnId-text-0", text = text))
+                            }
+                        }
                     }
 
                     if (isNewTurn) {
@@ -523,7 +524,7 @@ class RoxyAppViewModel(
             return
         }
 
-        if (parsed.pin?.length == 6) {
+        if (parsed.pin?.length == PAIRING_PIN_LENGTH) {
             _uiState.update { state ->
                 state.copy(
                     main = state.main.copy(
@@ -543,7 +544,7 @@ class RoxyAppViewModel(
                         isConnectingDialogVisible = true,
                         prefilledToken = parsed.token,
                         prefilledPin = "",
-                        qrFeedbackMessage = "QR code scanned! Enter the 6-digit PIN shown on your PC.",
+                        qrFeedbackMessage = "QR code scanned! Enter the $PAIRING_PIN_LENGTH-digit PIN shown on your PC.",
                         connectionError = null,
                     )
                 )
@@ -753,6 +754,8 @@ class RoxyAppViewModel(
     fun getInitialToken(): String = storage.savedToken ?: ""
     fun getInitialPin(): String = storage.savedPin ?: ""
 }
+
+private fun sourcePartIndex(partId: String): String = partId.substringAfterLast('-', "0")
 
 private fun initialUiState(): RoxyAppUiState {
     val computer = ComputerUiModel(

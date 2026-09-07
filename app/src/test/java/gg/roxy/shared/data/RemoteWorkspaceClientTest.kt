@@ -1,5 +1,6 @@
 package gg.roxy.shared.data
 
+import gg.roxy.chatFullscreen.businessLogic.ChatPartUiModel
 import gg.roxy.chatFullscreen.businessLogic.ToolCallStatus
 import gg.roxy.chatFullscreen.businessLogic.ToolCallType
 import kotlinx.coroutines.CompletableDeferred
@@ -233,6 +234,11 @@ class RemoteWorkspaceClientTest {
         assertTrue(event.isRunning)
         assertEquals("Run tests", event.userText)
         assertEquals("Starting tests now", event.inFlightText)
+        assertEquals(2, event.inFlightParts.size)
+        assertTrue(event.inFlightParts[0] is ChatPartUiModel.Tool)
+        val textPart = event.inFlightParts[1] as ChatPartUiModel.Text
+        assertEquals("turn-text-1", textPart.id)
+        assertEquals("Starting tests now", textPart.text)
         assertEquals(1, event.inFlightTools.size)
         assertEquals("call-live-1", event.inFlightTools[0].id)
         assertEquals(ToolCallStatus.Running, event.inFlightTools[0].status)

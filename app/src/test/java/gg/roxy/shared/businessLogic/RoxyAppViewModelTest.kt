@@ -1,9 +1,11 @@
 package gg.roxy.shared.businessLogic
 
 import gg.roxy.chatFullscreen.businessLogic.ChatMessageUiModel
+import gg.roxy.chatFullscreen.businessLogic.ChatPartUiModel
 import gg.roxy.chatFullscreen.businessLogic.ToolCallStatus
 import gg.roxy.chatFullscreen.businessLogic.ToolCallType
 import gg.roxy.chatFullscreen.businessLogic.ToolCallUiModel
+import gg.roxy.shared.PAIRING_PIN_LENGTH
 import gg.roxy.shared.data.RemoteConnectionState
 import gg.roxy.shared.data.RemoteEvent
 import gg.roxy.shared.data.RemoteSessionInfo
@@ -226,6 +228,52 @@ class RoxyAppViewModelTest {
         assertEquals("Checking logs now... All clear!", viewModel.uiState.value.chat.messages[1].text)
     }
 
+
+    @Test
+    fun turnChangedKeepsStreamingPartIdsStableAndPreservesReasoning() {
+        val client = FakeRemoteWorkspaceClient()
+        val viewModel = createViewModel(client = client)
+
+        client.fakeEvents.tryEmit(
+            RemoteEvent.SnapshotReceived(
+                sessionId = "sess-remote-1",
+                messages = listOf(ChatMessageUiModel(id = "user-1", text = "Explain", isUser = true)),
+                tools = emptyList(),
+            )
+        )
+
+        client.fakeEvents.tryEmit(
+            RemoteEvent.TurnChanged(
+                sessionId = "sess-remote-1",
+                isRunning = true,
+                inFlightParts = listOf(
+                    ChatPartUiModel.Reasoning(id = "turn-reasoning-0", text = "Thinking"),
+                    ChatPartUiModel.Text(id = "turn-text-1", text = "Hel"),
+                ),
+            )
+        )
+        val firstAssistant = viewModel.uiState.value.chat.messages.last()
+        val firstParts = firstAssistant.parts
+
+        client.fakeEvents.tryEmit(
+            RemoteEvent.TurnChanged(
+                sessionId = "sess-remote-1",
+                isRunning = true,
+                inFlightParts = listOf(
+                    ChatPartUiModel.Reasoning(id = "turn-reasoning-0", text = "Thinking more"),
+                    ChatPartUiModel.Text(id = "turn-text-1", text = "Hello"),
+                ),
+            )
+        )
+        val secondAssistant = viewModel.uiState.value.chat.messages.last()
+        val secondParts = secondAssistant.parts
+
+        assertEquals(firstAssistant.id, secondAssistant.id)
+        assertEquals(firstParts.map { it.id }, secondParts.map { it.id })
+        assertTrue(secondParts[0] is ChatPartUiModel.Reasoning)
+        assertEquals("Thinking more", (secondParts[0] as ChatPartUiModel.Reasoning).text)
+        assertEquals("Hello", (secondParts[1] as ChatPartUiModel.Text).text)
+    }
     @Test
     fun qrCodeScannedWithPinAutomaticallyConnects() {
         val client = FakeRemoteWorkspaceClient()
@@ -252,7 +300,7 @@ class RoxyAppViewModelTest {
         assertEquals("token_without_pin", viewModel.uiState.value.main.prefilledToken)
         assertEquals("", viewModel.uiState.value.main.prefilledPin)
         assertTrue(viewModel.uiState.value.main.isConnectingDialogVisible)
-        assertEquals("QR code scanned! Enter the 6-digit PIN shown on your PC.", viewModel.uiState.value.main.qrFeedbackMessage)
+        assertEquals("QR code scanned! Enter the $PAIRING_PIN_LENGTH-digit PIN shown on your PC.", viewModel.uiState.value.main.qrFeedbackMessage)
     }
 
     @Test

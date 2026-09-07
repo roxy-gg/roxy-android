@@ -6,6 +6,7 @@ import gg.roxy.chatFullscreen.businessLogic.ChatPartUiModel
 import gg.roxy.chatFullscreen.businessLogic.ToolCallStatus
 import gg.roxy.chatFullscreen.businessLogic.ToolCallType
 import gg.roxy.chatFullscreen.businessLogic.ToolCallUiModel
+import gg.roxy.shared.PAIRING_PIN_LENGTH
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
@@ -45,6 +46,7 @@ sealed interface RemoteEvent {
         val isRunning: Boolean,
         val userText: String? = null,
         val inFlightText: String? = null,
+        val inFlightParts: List<ChatPartUiModel> = emptyList(),
         val inFlightTools: List<ToolCallUiModel> = emptyList(),
     ) : RemoteEvent
     data class ErrorReceived(val message: String) : RemoteEvent
@@ -100,7 +102,7 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
         }
 
         val cleanedPin = pin.trim()
-        if (cleanedPin.length != 6) {
+        if (cleanedPin.length != PAIRING_PIN_LENGTH) {
             _connectionState.value = RemoteConnectionState.Error("PIN must be 6 digits")
             return
         }
@@ -383,21 +385,27 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
                 val userText = json.optString("userText").takeIf { it.isNotBlank() }
                 val isRunning = state == "running"
 
+                val inFlightParts = mutableListOf<ChatPartUiModel>()
                 val inFlightTools = mutableListOf<ToolCallUiModel>()
-                var inFlightText: String? = null
+                val textParts = mutableListOf<String>()
                 val partsArray = json.optJSONArray("parts")
                 if (partsArray != null && partsArray.length() > 0) {
-                    val textParts = mutableListOf<String>()
                     for (p in 0 until partsArray.length()) {
                         val partObj = partsArray.optJSONObject(p) ?: continue
                         when (partObj.optString("type")) {
                             "text" -> {
-                                val t = partObj.optString("text", "")
-                                if (t.isNotBlank()) textParts.add(t)
+                                val textPart = partObj.optString("text", "")
+                                if (textPart.isNotBlank()) {
+                                    inFlightParts.add(ChatPartUiModel.Text(id = "turn-text-$p", text = textPart))
+                                    textParts.add(textPart)
+                                }
                             }
                             "reasoning" -> {
-                                val r = partObj.optString("text", "")
-                                if (r.isNotBlank()) textParts.add(r)
+                                val reasoningText = partObj.optString("text", "")
+                                if (reasoningText.isNotBlank()) {
+                                    inFlightParts.add(ChatPartUiModel.Reasoning(id = "turn-reasoning-$p", text = reasoningText))
+                                    textParts.add(reasoningText)
+                                }
                             }
                             "tool" -> {
                                 val toolName = partObj.optString("tool", "tool")
@@ -406,27 +414,33 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
                                 val toolOutput = partObj.optString("output", "")
                                 val callId = partObj.optString("callId", UUID.randomUUID().toString())
                                 val toolType = resolveToolType(toolName)
-                                inFlightTools.add(
-                                    ToolCallUiModel(
-                                        id = callId,
-                                        type = toolType,
-                                        name = toolName,
-                                        title = toolTitle,
-                                        detail = toolOutput,
-                                        status = if (toolState == "done") ToolCallStatus.Complete else ToolCallStatus.Running,
-                                        isExpanded = false,
-                                    )
+                                val toolModel = ToolCallUiModel(
+                                    id = callId,
+                                    type = toolType,
+                                    name = toolName,
+                                    title = toolTitle,
+                                    detail = toolOutput,
+                                    status = if (toolState == "done") ToolCallStatus.Complete else ToolCallStatus.Running,
+                                    isExpanded = false,
                                 )
+                                inFlightParts.add(ChatPartUiModel.Tool(toolModel))
+                                inFlightTools.add(toolModel)
                             }
                         }
-                    }
-                    if (textParts.isNotEmpty()) {
-                        inFlightText = textParts.joinToString("\n\n")
                     }
                 }
 
                 scope.launch {
-                    _events.emit(RemoteEvent.TurnChanged(sessionId, isRunning, userText, inFlightText, inFlightTools))
+                    _events.emit(
+                        RemoteEvent.TurnChanged(
+                            sessionId = sessionId,
+                            isRunning = isRunning,
+                            userText = userText,
+                            inFlightText = textParts.takeIf { it.isNotEmpty() }?.joinToString("\n\n"),
+                            inFlightParts = inFlightParts,
+                            inFlightTools = inFlightTools,
+                        )
+                    )
                 }
             }
             "error" -> {
