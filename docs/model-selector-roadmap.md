@@ -1,72 +1,72 @@
-# Selector de modelos: evaluación y roadmap
+# Model selector: assessment and roadmap
 
-Evaluación del 7 de septiembre de 2026 sobre el código local de Android y `../roxy` (escritorio). No se verificó qué versión está desplegada en producción ni el código del relay.
+Assessment dated September 7, 2026, based on the local Android code and `../roxy` (desktop). The production version and relay implementation have not been verified.
 
-## Decisión
+## Decision
 
-**Complejidad media-alta para una implementación completa.** El catálogo y la configuración por sesión ya existen en escritorio, pero no están expuestos al móvil. Se necesita ampliar el contrato remoto, implementarlo en escritorio y Android, revisar el relay y validar la sincronización entre clientes. No es un cambio aislado del componente visual.
+**A complete implementation has medium-to-high complexity.** The desktop already has a model catalog and per-session configuration, but neither is exposed to mobile clients. Implementation requires extending the remote protocol, adding desktop and Android support, checking the relay, and validating synchronization between clients.
 
-Siguiendo la alternativa solicitada, se retiró la demo de Android: lista fija, selección local, buscador, panel y modelos ficticios. El compositor indica que utiliza el modelo de la sesión configurado en escritorio. El envío actual sigue funcionando igual.
+The Android demo has been removed: its hardcoded catalog, local selection state, search, bottom sheet, and placeholder models. The composer now explains that messages use the model configured for the session on the desktop. Prompt submission behavior is unchanged.
 
-## Evidencia del código
+## Code findings
 
-| Ubicación | Comportamiento encontrado |
+| Location | Observed behavior |
 | --- | --- |
-| `app/src/main/java/gg/roxy/chatFullscreen/components/ChatComposer.kt` (antes de esta limpieza) | `DesktopRoxyModels` estaba escrito a mano y `currentModel` solo vivía en `rememberSaveable`. No había callback hacia el ViewModel. |
-| `app/src/main/java/gg/roxy/shared/data/RemoteWorkspaceClient.kt` | `sendPrompt` envía únicamente `{ "t": "prompt", "text": "..." }`. No recibe catálogos ni confirmaciones de cambio de modelo. |
-| `../roxy/src/main/services/remote-protocol.ts` | `GuestFrame` admite `prompt`, `abort`, `list`, `switch` y `dequeue`; no hay operaciones para modelos. |
-| `../roxy/src/main/services/remote.ts` | `onFrame` no maneja selección de modelos. `runTurn` resuelve la configuración de la sesión y elige proveedor/modelo en el PC. Añadir un campo al prompt de Android sería ignorado por este host. |
-| `../roxy/src/main/services/models.ts` | `listModels(providerId)` ya obtiene catálogos por proveedor, incluidos catálogos autenticados y proxies. Es la base que debe reutilizarse. |
-| `../roxy/src/shared/session-config.ts` | `resolveSessionConfig` trata proveedor y modelo como pareja y mantiene configuración por sesión. También existen reglas para contexto y esfuerzo de razonamiento. |
-| `../roxy/src/main/db/repo.ts` | Ya existen `listConnectedProviders` y `setChatConfig` para consultar proveedores conectados y guardar configuración. |
+| `app/src/main/java/gg/roxy/chatFullscreen/components/ChatComposer.kt` (before this cleanup) | `DesktopRoxyModels` was hardcoded and `currentModel` existed only in `rememberSaveable`. There was no callback to the ViewModel. |
+| `app/src/main/java/gg/roxy/shared/data/RemoteWorkspaceClient.kt` | `sendPrompt` sends only `{ "t": "prompt", "text": "..." }`. It does not receive catalogs or model-change acknowledgments. |
+| `../roxy/src/main/services/remote-protocol.ts` | `GuestFrame` supports `prompt`, `abort`, `list`, `switch`, and `dequeue`; there are no model operations. |
+| `../roxy/src/main/services/remote.ts` | `onFrame` does not handle model selection. `runTurn` resolves session configuration and selects the provider/model on the PC. This host would ignore a model field added to an Android prompt. |
+| `../roxy/src/main/services/models.ts` | `listModels(providerId)` already retrieves provider catalogs, including authenticated catalogs and proxies. Reuse this implementation. |
+| `../roxy/src/shared/session-config.ts` | `resolveSessionConfig` treats provider and model as a pair and maintains per-session configuration. Context and reasoning-effort rules also exist. |
+| `../roxy/src/main/db/repo.ts` | `listConnectedProviders` and `setChatConfig` already query connected providers and persist configuration. |
 
-Un catálogo de un proveedor conectado no siempre acredita acceso efectivo a cada modelo: algunas rutas usan catálogos públicos. La interfaz debe reflejar las restricciones que conozca el host y mostrar rechazos reales del proveedor, sin prometer permisos que no puede comprobar.
+A connected provider's catalog does not always prove access to every listed model: some paths use public catalogs. The UI should reflect restrictions known to the host and surface actual provider rejections without claiming permissions it cannot verify.
 
-## Implementación propuesta, en orden
+## Implementation sequence
 
-### 1. Definir contrato y compatibilidad
+### 1. Define the protocol and compatibility behavior
 
-- Anunciar una capacidad opcional, por ejemplo `model-selection-v1`. Los clientes nuevos ocultan el selector si el host no la anuncia; los clientes antiguos deben seguir funcionando.
-- Definir consulta de catálogo, selección y respuesta confirmada. Ejemplo de petición: `{ "t": "select-model", "requestId": "r1", "sessionId": "s1", "providerId": "p1", "modelId": "m1", "expectedRevision": 3 }`.
-- Responder con `requestId`, `sessionId`, la pareja efectiva proveedor/modelo y una revisión, o un error explícito. Los nombres de mensajes de este documento son propuestas, no API existente.
-- Incluir en el catálogo identificadores estables, nombre visible, proveedor, capacidades y disponibilidad conocida. Nunca enviar credenciales.
-- Revisar en el relay las listas de tipos permitidos, validación por rol y límites de tamaño. Los comentarios del host lo describen como un intermediario de JSON, pero falta comprobar si admite tipos nuevos. Actualizar también el contrato del cliente web.
+- Advertise an optional capability, such as `model-selection-v1`. New clients hide the selector when the host does not advertise it; older clients must continue working.
+- Define catalog queries, selection requests, and acknowledgments. Example request: `{ "t": "select-model", "requestId": "r1", "sessionId": "s1", "providerId": "p1", "modelId": "m1", "expectedRevision": 3 }`.
+- Respond with `requestId`, `sessionId`, the effective provider/model pair, and a revision, or an explicit error. Message names in this document are proposals, not existing APIs.
+- Include stable identifiers, display names, providers, capabilities, and known availability in the catalog. Never send credentials.
+- Check the relay's allowed message types, role validation, and size limits. Host comments describe it as a JSON intermediary, but support for new types still needs verification. Update the web client's protocol definition as well.
 
-Criterio de salida: contrato documentado y prueba de que los mensajes recorren el relay en ambos sentidos.
+Acceptance criterion: a documented protocol and a test proving that messages traverse the relay in both directions.
 
-### 2. Implementar el host de escritorio
+### 2. Implement desktop host support
 
-- Construir el catálogo desde `listConnectedProviders()` y `listModels(providerId)`, reutilizando sus cachés y filtros. Distinguir un proveedor sin modelos de una consulta fallida; permitir resultados parciales y reintento.
-- Resolver y publicar la selección efectiva con la misma lógica que ejecuta los turnos, incluidos los valores por defecto. Evitar un segundo resolver que pueda mostrar un modelo distinto del ejecutado.
-- Validar sesión, proveedor conectado, modelo y revisión; persistir la pareja con `setChatConfig`. Alinear los valores por defecto para sesiones nuevas con la política del selector de escritorio.
-- Confirmar solo después de guardar. Notificar a escritorio y móviles cuando cambie la configuración, también si el cambio se origina en el PC.
-- Publicar el estado al conectar, cambiar de sesión y reconectar. Descartar respuestas de consultas pertenecientes a una conexión o sesión anterior.
-- Para el primer alcance, rechazar cambios mientras la sesión tenga un turno o una cola pendiente. Así no cambia inesperadamente el modelo de mensajes ya enviados. Implementar la misma regla en ambos clientes; el host debe hacerla cumplir.
+- Build the catalog from `listConnectedProviders()` and `listModels(providerId)`, reusing their caches and filters. Distinguish a provider with no models from a failed query; support partial results and retries.
+- Resolve and publish the effective selection using the same logic that executes turns, including defaults. Avoid a separate resolver that could display a different model from the one being executed.
+- Validate the session, connected provider, model, and revision; persist the pair with `setChatConfig`. Align defaults for new sessions with the desktop selector's policy.
+- Acknowledge changes only after saving. Notify desktop and mobile clients when configuration changes, including changes initiated on the PC.
+- Publish state on connection, session switches, and reconnection. Discard query responses belonging to an earlier connection or session.
+- For the initial scope, reject changes while the session has an active turn or pending queue. This prevents unexpected model changes for messages already submitted. Apply the same rule in both clients and enforce it on the host.
 
-Criterio de salida: una selección confirmada determina el modelo del siguiente turno y no modifica otras sesiones.
+Acceptance criterion: an acknowledged selection determines the next turn's model without modifying other sessions.
 
-### 3. Conectar Android
+### 3. Connect Android
 
-- Añadir DTOs y eventos de catálogo/configuración en `RemoteModels.kt` y `RemoteWorkspaceClient.kt`.
-- Mantener catálogo, selección confirmada y petición pendiente en `RoxyAppViewModel`, identificados por conexión y sesión. Limpiar los datos al cambiar de PC o desconectar.
-- Extender `ChatFullScreenUiState` y conectar callbacks a través de `MainActivity`, `RoxyApp` y `ChatFullScreen` hasta `ChatComposer`.
-- Recuperar el selector con datos del host: búsqueda, grupos por proveedor, carga, catálogo vacío, error y reintento. Usar `(providerId, modelId)` como identidad: un mismo nombre puede existir en varios proveedores.
-- Mantener marcada la selección confirmada mientras se guarda otra. Bloquear envío durante el cambio pendiente para que el mensaje no salga con el modelo anterior por una carrera. Ante error o timeout, conservar la selección confirmada y consultar de nuevo.
-- Reflejar cambios realizados desde el PC y separar correctamente el estado de dos sesiones. Posponer favoritos y adornos hasta tener sincronización real.
+- Add catalog/configuration DTOs and events in `RemoteModels.kt` and `RemoteWorkspaceClient.kt`.
+- Keep the catalog, confirmed selection, and pending request in `RoxyAppViewModel`, keyed by connection and session. Clear data when switching PCs or disconnecting.
+- Extend `ChatFullScreenUiState` and wire callbacks through `MainActivity`, `RoxyApp`, and `ChatFullScreen` to `ChatComposer`.
+- Restore the selector using host data: search, provider groups, loading, empty catalog, errors, and retries. Use `(providerId, modelId)` as the identity because multiple providers may use the same model name.
+- Keep the confirmed selection marked while another selection is being saved. Block prompt submission while a change is pending so a race cannot send the message with the previous model. On error or timeout, retain the confirmed selection and query again.
+- Reflect changes made on the PC and keep state isolated between sessions. Defer favorites and visual extras until synchronization works.
 
-Criterio de salida: el móvil muestra el catálogo recibido y nunca presenta una selección local como si ya estuviera aplicada en el PC.
+Acceptance criterion: the mobile client displays the received catalog and never presents a local selection as already applied on the PC.
 
-### 4. Validar y publicar
+### 4. Validate and release
 
-- Pruebas de protocolo: catálogo vacío/parcial, errores, confirmación, timeout, tipos desconocidos y compatibilidad con host antiguo.
-- Pruebas del host: proveedor desconectado, modelo inválido, sesión inexistente, revisión obsoleta, persistencia y aislamiento entre sesiones.
-- Pruebas Android: abrir A, cambiar a B antes de recibir la respuesta de A, cambiar de PC, reconectar y recibir cambios desde escritorio.
-- Prueba de integración: seleccionar en Android y comprobar los argumentos `providerId` y `model` recibidos por `runSessionTurn`; no basta con verificar la etiqueta.
-- Prueba con PC y móvil reales: varios proveedores, cambio de selección en ambos extremos, reconexión y rechazo durante ejecución/cola.
-- Publicar primero el soporte compatible del relay si hace falta, después el host y finalmente Android. Mantener oculto el selector para versiones sin soporte.
+- Protocol tests: empty/partial catalogs, errors, acknowledgment, timeout, unknown types, and compatibility with older hosts.
+- Host tests: disconnected provider, invalid model, missing session, stale revision, persistence, and isolation between sessions.
+- Android tests: open A, switch to B before receiving A's response, switch PCs, reconnect, and receive desktop configuration changes.
+- Integration test: select a model on Android and verify the `providerId` and `model` arguments received by `runSessionTurn`; checking the label alone is insufficient.
+- Test with a real PC and phone: multiple providers, selection changes from both ends, reconnection, and rejection during execution or while prompts are queued.
+- Release compatible relay support first if needed, then the host, and finally Android. Keep the selector hidden for unsupported versions.
 
-## Estimación orientativa
+## Rough estimate
 
-Entre **2 y 4 sesiones de trabajo** para contrato/relay, host, Android y validación conjunta, suponiendo acceso a los repositorios y un entorno de prueba. No es una garantía de plazo: depende especialmente de las restricciones del relay y de cómo se propagan los cambios de configuración del escritorio.
+**2-4 working sessions** for protocol/relay work, the host, Android, and joint validation, assuming repository access and a test environment. This is not a delivery guarantee: timing depends particularly on relay restrictions and how desktop configuration changes are propagated.
 
-Primer entregable recomendable: catálogo real y modelo efectivo en modo lectura, anunciado por capacidad. Segundo: selección persistida y confirmada con prueba de ejecución. El selector interactivo se habilita cuando ambos estén completos.
+Recommended first milestone: a real catalog and effective model in read-only mode, gated by capability support. Second milestone: persisted, acknowledged selection with an execution test. Enable the interactive selector once both are complete.
