@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -17,7 +18,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Computer
-import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material3.Button
@@ -41,10 +41,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import gg.roxy.shared.components.PinInput
 import gg.roxy.shared.styles.RoxyMonoFontFamily
 import gg.roxy.shared.styles.roxyColors
 
@@ -243,39 +243,12 @@ fun ConnectComputerDialog(
                         ),
                         color = colors.textSubtle,
                     )
-                    OutlinedTextField(
+                    PinInput(
                         value = pinInput,
-                        onValueChange = { if (it.length <= 6) pinInput = it },
+                        onValueChange = { pinInput = it },
                         modifier = Modifier.fillMaxWidth(),
-                        placeholder = {
-                            Text(
-                                "e.g. 123456",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = colors.textSubtle,
-                            )
-                        },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Rounded.Key,
-                                contentDescription = null,
-                                tint = colors.textMuted,
-                                modifier = Modifier.size(18.dp),
-                            )
-                        },
-                        singleLine = true,
-                        shape = RoundedCornerShape(12.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = colors.edgeStrong,
-                            unfocusedBorderColor = colors.edge,
-                            focusedContainerColor = colors.surface2,
-                            unfocusedContainerColor = colors.surface2,
-                            focusedTextColor = colors.text,
-                            unfocusedTextColor = colors.text,
-                        ),
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Number,
-                            imeAction = ImeAction.Done,
-                        ),
+                        enabled = !isConnecting,
+                        isError = errorMessage != null,
                         keyboardActions = KeyboardActions(
                             onDone = {
                                 keyboardController?.hide()
@@ -329,6 +302,7 @@ fun ConnectComputerDialog(
                         enabled = canConnect,
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = colors.accent,
                             contentColor = colors.bg,
@@ -338,14 +312,14 @@ fun ConnectComputerDialog(
                     ) {
                         if (isConnecting) {
                             CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
+                                modifier = Modifier.size(14.dp),
                                 strokeWidth = 2.dp,
-                                color = colors.bg,
+                                color = colors.textSubtle,
                             )
                             Spacer(Modifier.width(8.dp))
-                            Text("Connecting...")
+                            Text("Connecting", maxLines = 1)
                         } else {
-                            Text("Connect")
+                            Text("Connect", maxLines = 1)
                         }
                     }
                 }
