@@ -376,23 +376,38 @@ class RoxyAppViewModel(
                 }
 
                 if (event.inFlightTools.isNotEmpty() || event.inFlightText != null) {
+                    // The turn streams as a whole message per event, so the row
+                    // keys have to be derived from the message that owns them.
+                    // A fresh id per event would rebuild the streaming row on
+                    // every chunk, discarding its layout state and making the
+                    // list treat it as a removal plus an insertion.
+                    val isNewTurn = currentMessages.isEmpty() || currentMessages.last().isUser
+                    val turnId = if (isNewTurn) {
+                        UUID.randomUUID().toString()
+                    } else {
+                        currentMessages.last().id
+                    }
+
                     val inFlightParts = mutableListOf<ChatPartUiModel>()
                     event.inFlightTools.forEach { tool ->
                         inFlightParts.add(ChatPartUiModel.Tool(tool))
                     }
                     if (event.inFlightText != null) {
+                        // Matches the shape the snapshot parser emits, so the key
+                        // survives the streamed turn being replaced by its
+                        // server-sent version once the turn closes.
                         inFlightParts.add(
                             ChatPartUiModel.Text(
-                                id = UUID.randomUUID().toString(),
+                                id = "$turnId-text-0",
                                 text = event.inFlightText,
                             )
                         )
                     }
 
-                    if (currentMessages.isEmpty() || currentMessages.last().isUser) {
+                    if (isNewTurn) {
                         currentMessages.add(
                             ChatMessageUiModel(
-                                id = UUID.randomUUID().toString(),
+                                id = turnId,
                                 isUser = false,
                                 parts = inFlightParts,
                             )
