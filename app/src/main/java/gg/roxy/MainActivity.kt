@@ -37,6 +37,7 @@ class MainActivity : ComponentActivity() {
                     onBackFromChat = viewModel::showMainScreen,
                     onComposerChange = viewModel::updateComposer,
                     onComposerSubmit = viewModel::submitComposer,
+                    onReconnect = viewModel::reconnectRemote,
                     onToolCallClick = viewModel::toggleToolCall,
                     onAddNewComputer = viewModel::showConnectDialog,
                     onScanQrCode = ::startQrScanner,

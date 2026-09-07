@@ -56,7 +56,8 @@ interface RemoteWorkspaceClient {
     val connectionState: StateFlow<RemoteConnectionState>
     val events: SharedFlow<RemoteEvent>
     fun connect(rawTokenOrUrl: String, pin: String)
-    fun sendPrompt(text: String)
+    /** True means queued on the socket, not acknowledged by the host. */
+    fun sendPrompt(text: String): Boolean
     fun switchSession(sessionId: String)
     fun refreshSessions()
     fun abort()
@@ -470,13 +471,14 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
         }
     }
 
-    override fun sendPrompt(text: String) {
-        val ws = activeWebSocket ?: return
+    override fun sendPrompt(text: String): Boolean {
+        val ws = activeWebSocket ?: return false
+        if (!isHandshakeComplete || text.isBlank()) return false
         val payload = JSONObject().apply {
             put("t", "prompt")
             put("text", text)
         }
-        ws.send(payload.toString())
+        return ws.send(payload.toString())
     }
 
     override fun switchSession(sessionId: String) {

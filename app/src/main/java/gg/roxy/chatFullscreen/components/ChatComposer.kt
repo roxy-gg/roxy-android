@@ -40,6 +40,7 @@ fun ChatComposer(
     onTextChange: (String) -> Unit,
     onSubmit: () -> Unit,
     modifier: Modifier = Modifier,
+    canSubmit: Boolean = true,
 ) {
     val colors = MaterialTheme.roxyColors
 
@@ -65,7 +66,7 @@ fun ChatComposer(
                 textStyle = MaterialTheme.typography.bodyMedium.copy(color = colors.text),
                 cursorBrush = SolidColor(colors.accent),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { if (text.isNotBlank()) onSubmit() }),
+                keyboardActions = KeyboardActions(onSend = { if (canSubmit && text.isNotBlank()) onSubmit() }),
                 decorationBox = { innerTextField ->
                     Box {
                         if (text.isEmpty()) {
@@ -115,7 +116,7 @@ fun ChatComposer(
                 )
 
                 // Send Button with clean default theme (White when active)
-                val isSendActive = text.isNotBlank()
+                val isSendActive = canSubmit && text.isNotBlank()
                 Surface(
                     onClick = onSubmit,
                     enabled = isSendActive,

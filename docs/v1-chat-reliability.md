@@ -6,7 +6,7 @@ Branch: `codex/v1-chat-reliability`. Based on the current chat/PIN fixes plus th
 
 Each module is committed separately. Do not publish a release until the verification checklist passes.
 
-- [ ] Module 1: report transport send failures, block offline sends, preserve drafts, expose connection recovery in chat.
+- [x] Module 1: report transport send failures, block offline sends, preserve drafts, expose connection recovery in chat.
 - [ ] Module 2: display remote errors, wait for authoritative session synchronization, allow one turn at a time, preserve stream event ordering.
 - [ ] Module 3: connect Stop for mobile-started turns, wait for host confirmation, remove attachment placeholders.
 - [ ] Module 4: regression tests, debug/release compilation, and final review.
@@ -32,4 +32,6 @@ Initial environment issue: Gradle fails before running tasks with `Unable to est
 ## Progress
 
 - Baseline saved in commit `0b01e02`; includes the already-reviewed model selector cleanup and English roadmap.
-- Implementation pending.
+- Module 1 implemented and validated: 48 unit tests passed and the debug APK built. Drafts survive rejected sends, accidental disconnects, and session navigation; explicit disconnect clears them. Reconnect requests the previous session without replaying prompts.
+- Local Windows workaround discovered: run Gradle with `JAVA_TOOL_OPTIONS=-Djdk.net.unixdomain.tmpdir=C:/nonexistent-roxy-unix-sockets`. The directory must not exist; Java falls back to TCP for its internal selector wakeup pipe. This is a process-local workaround, not a project setting or Android runtime change.
+- Next: module 2. Remote errors and overlapping sends are not yet addressed by module 1.

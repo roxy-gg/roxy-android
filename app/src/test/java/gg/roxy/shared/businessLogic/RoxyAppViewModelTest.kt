@@ -33,13 +33,20 @@ class FakeRemoteWorkspaceClient : RemoteWorkspaceClient {
 
     var lastPromptSent: String? = null
     var lastSwitchedSession: String? = null
+    var acceptPrompts = true
+    var promptCount = 0
+
+    fun setConnection(state: RemoteConnectionState) { _connectionState.value = state }
 
     override fun connect(rawTokenOrUrl: String, pin: String) {
         _connectionState.value = RemoteConnectionState.Connected("Test PC")
     }
 
-    override fun sendPrompt(text: String) {
+    override fun sendPrompt(text: String): Boolean {
+        if (!acceptPrompts) return false
         lastPromptSent = text
+        promptCount++
+        return true
     }
 
     override fun switchSession(sessionId: String) {
@@ -122,6 +129,8 @@ class RoxyAppViewModelTest {
     fun composerAndToolCallsAreControlledByTheViewModel() {
         val client = FakeRemoteWorkspaceClient()
         val viewModel = createViewModel(client = client)
+        client.connect("tok", "123456")
+        client.fakeEvents.tryEmit(RemoteEvent.SnapshotReceived("sess-1", emptyList(), emptyList()))
 
         client.fakeEvents.tryEmit(
             RemoteEvent.ToolStarted(
@@ -452,6 +461,79 @@ class RoxyAppViewModelTest {
         viewModel.openSession("sess-1")
         assertTrue(viewModel.uiState.value.chat.messages.isEmpty())
         assertTrue(viewModel.uiState.value.chat.isSyncing)
+    }
+
+    @Test
+    fun offlineSendPreservesDraftAndTranscript() {
+        val client = FakeRemoteWorkspaceClient()
+        val viewModel = connectedSession(client)
+        viewModel.updateComposer("Keep this draft")
+        client.setConnection(RemoteConnectionState.Error("Network lost"))
+
+        viewModel.submitComposer()
+
+        assertEquals("Keep this draft", viewModel.uiState.value.chat.composerText)
+        assertTrue(viewModel.uiState.value.chat.messages.isEmpty())
+        assertEquals(0, client.promptCount)
+        assertFalse(viewModel.uiState.value.chat.canSubmit)
+        assertEquals("Network lost", viewModel.uiState.value.chat.errorMessage)
+    }
+
+    @Test
+    fun socketRejectionPreservesDraftWithoutAnOptimisticMessage() {
+        val client = FakeRemoteWorkspaceClient()
+        val viewModel = connectedSession(client)
+        client.acceptPrompts = false
+        viewModel.updateComposer("Do not lose this")
+
+        viewModel.submitComposer()
+
+        assertEquals("Do not lose this", viewModel.uiState.value.chat.composerText)
+        assertTrue(viewModel.uiState.value.chat.messages.isEmpty())
+        assertFalse(viewModel.uiState.value.chat.isRunning)
+        assertTrue(viewModel.uiState.value.chat.errorMessage!!.contains("not sent"))
+    }
+
+    @Test
+    fun reconnectPreservesDraftAndRequestsTheSameSessionWithoutResending() {
+        val client = FakeRemoteWorkspaceClient()
+        val storage = FakeRemoteStorage().apply { savedToken = "tok"; savedPin = "123456" }
+        val viewModel = createViewModel(client, storage)
+        client.fakeEvents.tryEmit(RemoteEvent.SnapshotReceived("sess-1", emptyList(), emptyList()))
+        viewModel.updateComposer("A pending draft")
+        client.setConnection(RemoteConnectionState.Disconnected)
+
+        viewModel.reconnectRemote()
+
+        assertEquals("sess-1", client.lastSwitchedSession)
+        assertEquals("A pending draft", viewModel.uiState.value.chat.composerText)
+        assertTrue(viewModel.uiState.value.chat.isSyncing)
+        assertFalse(viewModel.uiState.value.chat.canSubmit)
+        assertEquals(0, client.promptCount)
+    }
+
+    @Test
+    fun sessionSwitchRestoresEachSessionsDraft() {
+        val client = FakeRemoteWorkspaceClient()
+        val viewModel = connectedSession(client)
+        client.fakeEvents.tryEmit(RemoteEvent.SessionsReceived(listOf(
+            RemoteSessionInfo("sess-1", "One", "Project"),
+            RemoteSessionInfo("sess-2", "Two", "Project"),
+        ), "sess-1"))
+        viewModel.updateComposer("Draft one")
+        viewModel.openSession("sess-2")
+        viewModel.updateComposer("Draft two")
+        viewModel.openSession("sess-1")
+        assertEquals("Draft one", viewModel.uiState.value.chat.composerText)
+        viewModel.openSession("sess-2")
+        assertEquals("Draft two", viewModel.uiState.value.chat.composerText)
+    }
+
+    private fun connectedSession(client: FakeRemoteWorkspaceClient): RoxyAppViewModel {
+        val viewModel = createViewModel(client)
+        client.connect("tok", "123456")
+        client.fakeEvents.tryEmit(RemoteEvent.SnapshotReceived("sess-1", emptyList(), emptyList()))
+        return viewModel
     }
 
     private fun RoxyAppViewModel.toolCall(id: String): ToolCallUiModel =

@@ -28,6 +28,14 @@ class MemoryRemoteStorage : RemoteStorage {
 class RemoteWorkspaceClientTest {
 
     @Test
+    fun promptWithoutALiveSocketIsRejected() {
+        val client = DefaultRemoteWorkspaceClient(MemoryRemoteStorage())
+        assertFalse(client.sendPrompt("Hello"))
+        client.handleIncomingMessage("""{"t":"hello-ok"}""")
+        assertFalse(client.sendPrompt("Hello"))
+    }
+
+    @Test
     fun snapshotWithTextAndToolPartsParsesBothCorrectly() = runBlocking {
         val storage = MemoryRemoteStorage()
         val client = DefaultRemoteWorkspaceClient(storage)

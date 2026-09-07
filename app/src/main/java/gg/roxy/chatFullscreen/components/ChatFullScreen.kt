@@ -143,6 +143,7 @@ fun ChatFullScreen(
     onComposerSubmit: () -> Unit,
     onToolCallClick: (String) -> Unit,
     modifier: Modifier = Modifier,
+    onReconnect: () -> Unit = {},
 ) {
     val colors = MaterialTheme.roxyColors
     BackHandler(onBack = onBackClick)
@@ -203,6 +204,7 @@ fun ChatFullScreen(
             onBackClick = onBackClick,
         )
         HorizontalDivider(color = colors.border)
+        ChatStatusBanner(uiState, onReconnect)
 
         if (isSessionEmpty) {
             Box(
@@ -327,6 +329,7 @@ fun ChatFullScreen(
         ) {
             ChatComposer(
                 text = uiState.composerText,
+                canSubmit = uiState.canSubmit,
                 onTextChange = onComposerChange,
                 onSubmit = {
                     onComposerSubmit()
