@@ -58,7 +58,6 @@ data class ChatMessageUiModel(
 
 @Immutable
 data class ChatFullScreenUiState(
-    val sessionId: String = "",
     val sessionTitle: String,
     val projectName: String,
     val messages: List<ChatMessageUiModel>,

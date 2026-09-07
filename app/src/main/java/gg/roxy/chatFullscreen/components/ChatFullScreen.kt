@@ -36,7 +36,6 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -134,9 +133,7 @@ fun ChatFullScreen(
         buildChatRows(uiState.messages, uiState.toolCalls)
     }
 
-    // Each session gets its own scroll position, so opening one starts on its
-    // newest row instead of inheriting wherever the previous one was left.
-    val listState = key(uiState.sessionId) { rememberLazyListState() }
+    val listState = rememberLazyListState()
 
     // The list is reversed, so the anchor item is the newest row: this reads as
     // "the viewport is resting against the bottom edge".
