@@ -104,10 +104,15 @@ private fun buildChatRows(
         }
     }
 
-    // Fallback for tools not associated with an existing message part.
+    // Fallback for tools not associated with an existing message part. They have
+    // no chronological anchor, so they sit at the oldest end of the transcript.
+    // Appending them would instead make them permanently the newest row, and
+    // because their key is constant the newest key would never change again: an
+    // incoming message would not trigger the pin, and sending would scroll to
+    // the tool pile rather than the sent message.
     val renderedToolIds = rows.filterIsInstance<ChatRow.Tool>().mapTo(mutableSetOf()) { it.tool.id }
     val orphanTools = toolCalls.filterNot { it.id in renderedToolIds }
-    if (orphanTools.isNotEmpty()) rows += ChatRow.OrphanTools(orphanTools)
+    if (orphanTools.isNotEmpty()) rows.add(0, ChatRow.OrphanTools(orphanTools))
 
     rows.reverse()
     return rows
