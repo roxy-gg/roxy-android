@@ -144,6 +144,7 @@ fun ChatFullScreen(
     onToolCallClick: (String) -> Unit,
     modifier: Modifier = Modifier,
     onReconnect: () -> Unit = {},
+    onStop: () -> Unit = {},
 ) {
     val colors = MaterialTheme.roxyColors
     BackHandler(onBack = onBackClick)
@@ -200,6 +201,7 @@ fun ChatFullScreen(
             sessionTitle = uiState.sessionTitle,
             projectName = uiState.projectName,
             isRunning = uiState.isRunning,
+            isStopping = uiState.isStopping,
             isSyncing = uiState.isSyncing,
             onBackClick = onBackClick,
         )
@@ -330,6 +332,10 @@ fun ChatFullScreen(
             ChatComposer(
                 text = uiState.composerText,
                 canSubmit = uiState.canSubmit,
+                showStop = uiState.isRunning && uiState.isMobileTurn,
+                canStop = uiState.canStop,
+                isStopping = uiState.isStopping,
+                onStop = onStop,
                 onTextChange = onComposerChange,
                 onSubmit = {
                     onComposerSubmit()
@@ -351,6 +357,7 @@ fun ChatHeader(
     sessionTitle: String,
     projectName: String,
     isRunning: Boolean = false,
+    isStopping: Boolean = false,
     isSyncing: Boolean = false,
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -406,7 +413,7 @@ fun ChatHeader(
             )
             Spacer(Modifier.width(8.dp))
             Text(
-                text = "Thinking...",
+                text = if (isStopping) "Stopping..." else "Thinking...",
                 style = MaterialTheme.typography.labelSmall,
                 color = colors.accent,
             )

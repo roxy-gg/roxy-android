@@ -49,6 +49,7 @@ class RoxyAppViewModel(
     private val remoteClient: RemoteWorkspaceClient,
     private val storage: RemoteStorage,
     private val externalScope: CoroutineScope? = null,
+    private val operationTimeoutMs: Long = 15_000,
 ) : ViewModel() {
 
     @Inject
@@ -69,6 +70,7 @@ class RoxyAppViewModel(
     private val turnsReceived = mutableSetOf<String>()
     private var syncTimeoutJob: Job? = null
     private val responseTimeoutJobs = mutableMapOf<String, Job>()
+    private val stopTimeoutJobs = mutableMapOf<String, Job>()
 
     private data class SessionChatCache(
         val messages: List<ChatMessageUiModel> = emptyList(),
@@ -78,6 +80,8 @@ class RoxyAppViewModel(
         val pendingPrompt: ChatMessageUiModel? = null,
         val queuedPromptCount: Int = 0,
         val errorMessage: String? = null,
+        val isMobileTurn: Boolean = false,
+        val isStopping: Boolean = false,
     )
 
     private val sessionCache = mutableMapOf<String, SessionChatCache>()
@@ -100,6 +104,9 @@ class RoxyAppViewModel(
                     syncTimeoutJob?.cancel()
                     responseTimeoutJobs.values.forEach { it.cancel() }
                     responseTimeoutJobs.clear()
+                    stopTimeoutJobs.values.forEach { it.cancel() }
+                    stopTimeoutJobs.clear()
+                    sessionCache.replaceAll { _, cached -> cached.copy(isStopping = false) }
                 }
                 _uiState.update { state ->
                     when (connectionState) {
@@ -142,6 +149,7 @@ class RoxyAppViewModel(
                                     isSessionReady = false,
                                     isConnecting = false,
                                     isRunning = false,
+                                    isStopping = false,
                                     isSyncing = false,
                                     errorMessage = connectionState.message,
                                 ),
@@ -173,6 +181,7 @@ class RoxyAppViewModel(
                                     isSessionReady = false,
                                     isConnecting = false,
                                     isRunning = false,
+                                    isStopping = false,
                                     isSyncing = false,
                                     errorMessage = if (activeSessionId != null) "Connection lost. Reconnect before sending another message." else null,
                                 ),
@@ -230,6 +239,7 @@ class RoxyAppViewModel(
                                 isSyncing = false,
                                 isSessionReady = isSessionReady(event.sessionId),
                                 isAwaitingResponse = false,
+                                isMobileTurn = current.isMobileTurn,
                             )
                         )
                     }
@@ -410,6 +420,7 @@ class RoxyAppViewModel(
                 if (confirmsPendingPrompt) {
                     responseTimeoutJobs.remove(event.sessionId)?.cancel()
                 }
+                if (!event.isRunning) stopTimeoutJobs.remove(event.sessionId)?.cancel()
                 if (event.userText != null && (currentMessages.isEmpty() || currentMessages.last().text != event.userText)) {
                     currentMessages.add(
                         ChatMessageUiModel(
@@ -475,6 +486,8 @@ class RoxyAppViewModel(
                     messages = currentMessages,
                     toolCalls = currentTools,
                     pendingPrompt = if (confirmsPendingPrompt) null else current.pendingPrompt,
+                    isMobileTurn = event.isRunning && (confirmsPendingPrompt || (current.isMobileTurn && event.userText == null)),
+                    isStopping = event.isRunning && current.isStopping,
                 )
 
                 if (activeSessionId == null || activeSessionId == event.sessionId) {
@@ -486,6 +499,8 @@ class RoxyAppViewModel(
                                 toolCalls = currentTools,
                                 isSessionReady = isSessionReady(event.sessionId) && state.chat.errorMessage == null,
                                 isAwaitingResponse = sessionCache[event.sessionId]?.pendingPrompt != null,
+                                isMobileTurn = sessionCache[event.sessionId]?.isMobileTurn ?: false,
+                                isStopping = sessionCache[event.sessionId]?.isStopping ?: false,
                             )
                         )
                     }
@@ -527,7 +542,7 @@ class RoxyAppViewModel(
         _uiState.update { it.copy(chat = it.chat.copy(isSyncing = true, isSessionReady = false, errorMessage = null)) }
         syncTimeoutJob?.cancel()
         syncTimeoutJob = scope.launch {
-            delay(15_000)
+            delay(operationTimeoutMs)
             if (activeSessionId == sessionId && !isSessionReady(sessionId)) {
                 _uiState.update { it.copy(chat = it.chat.copy(isSyncing = false, errorMessage = "Could not refresh this session. Try refreshing again.")) }
             }
@@ -758,6 +773,8 @@ class RoxyAppViewModel(
                     isSessionReady = false,
                     queuedPromptCount = cached?.queuedPromptCount ?: 0,
                     isAwaitingResponse = cached?.pendingPrompt != null,
+                    isMobileTurn = cached?.isMobileTurn ?: false,
+                    isStopping = cached?.isStopping ?: false,
                 ),
             )
         }
@@ -810,12 +827,37 @@ class RoxyAppViewModel(
             draft = "",
         )
         responseTimeoutJobs[activeId] = scope.launch {
-            delay(15_000)
+            delay(operationTimeoutMs)
             if (sessionCache[activeId]?.pendingPrompt?.id == userMessage.id) {
                 val message = "Your PC has not confirmed this message. Refresh the session before sending it again."
                 sessionCache[activeId] = sessionCache.getValue(activeId).copy(errorMessage = message)
                 if (activeSessionId == activeId) {
                     _uiState.update { it.copy(chat = it.chat.copy(errorMessage = message, isSessionReady = false)) }
+                }
+            }
+        }
+    }
+
+    fun stopTurn() {
+        val sessionId = activeSessionId ?: return
+        if (!_uiState.value.chat.canStop || remoteClient.connectionState.value !is RemoteConnectionState.Connected) return
+        if (!remoteClient.abort()) {
+            _uiState.update { it.copy(chat = it.chat.copy(
+                errorMessage = "Could not send Stop. Refresh the session to check its status.",
+                isSessionReady = false,
+            )) }
+            return
+        }
+        val cached = sessionCache[sessionId] ?: return
+        sessionCache[sessionId] = cached.copy(isStopping = true)
+        _uiState.update { it.copy(chat = it.chat.copy(isStopping = true)) }
+        stopTimeoutJobs[sessionId] = scope.launch {
+            delay(operationTimeoutMs)
+            if (sessionCache[sessionId]?.isStopping == true) {
+                val message = "Your PC has not confirmed Stop. Refresh the session to check its status."
+                sessionCache[sessionId] = sessionCache.getValue(sessionId).copy(isStopping = false, errorMessage = message)
+                if (activeSessionId == sessionId) {
+                    _uiState.update { it.copy(chat = it.chat.copy(isStopping = false, isSessionReady = false, errorMessage = message)) }
                 }
             }
         }

@@ -8,7 +8,7 @@ Each module is committed separately. Do not publish a release until the verifica
 
 - [x] Module 1: report transport send failures, block offline sends, preserve drafts, expose connection recovery in chat.
 - [x] Module 2: display remote errors, wait for authoritative session synchronization, allow one turn at a time, preserve stream event ordering.
-- [ ] Module 3: connect Stop for mobile-started turns, wait for host confirmation, remove attachment placeholders.
+- [x] Module 3: connect Stop for mobile-started turns, wait for host confirmation, remove attachment placeholders.
 - [ ] Module 4: regression tests, debug/release compilation, and final review.
 
 ## Design constraints
@@ -36,4 +36,5 @@ Initial environment issue: Gradle fails before running tasks with `Unable to est
 - Local Windows workaround discovered: run Gradle with `JAVA_TOOL_OPTIONS=-Djdk.net.unixdomain.tmpdir=C:/nonexistent-roxy-unix-sockets`. The directory must not exist; Java falls back to TCP for its internal selector wakeup pipe. This is a process-local workaround, not a project setting or Android runtime change.
 - Module 2: 56 unit tests passed and the debug APK built. Session readiness requires snapshot + turn; prompts remain pending until the host starts them; desktop queues block additional sends. Errors appear inside chat with a refresh action. Events are processed serially and filtered by connection generation, including replayed events.
 - The user saved in-progress module 2 changes in `72ae0ab` during the pause. The module 2 checkpoint fixes the incomplete edits in that commit and adds regression coverage.
-- Next: module 3 (Stop and attachment cleanup).
+- Module 3: 62 unit tests passed and the debug APK built. Stop is exposed only for a confirmed mobile-started turn; repeated clicks, offline/rejected aborts, and timeouts are covered. The UI waits for host idle. Attachment controls and image placeholder text have been removed.
+- Next: final review, release compilation, and device-test availability.

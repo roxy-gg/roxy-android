@@ -19,6 +19,9 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -35,6 +38,8 @@ class FakeRemoteWorkspaceClient : RemoteWorkspaceClient {
     var lastSwitchedSession: String? = null
     var acceptPrompts = true
     var promptCount = 0
+    var abortCount = 0
+    var acceptAbort = true
 
     fun setConnection(state: RemoteConnectionState) { _connectionState.value = state }
 
@@ -54,7 +59,10 @@ class FakeRemoteWorkspaceClient : RemoteWorkspaceClient {
     }
 
     override fun refreshSessions() {}
-    override fun abort() {}
+    override fun abort(): Boolean {
+        abortCount++
+        return acceptAbort
+    }
     override fun disconnect() {
         _connectionState.value = RemoteConnectionState.Disconnected
     }
@@ -620,8 +628,98 @@ class RoxyAppViewModelTest {
         assertTrue(viewModel.uiState.value.chat.canSubmit)
     }
 
-    private fun connectedSession(client: FakeRemoteWorkspaceClient): RoxyAppViewModel {
-        val viewModel = createViewModel(client)
+    @Test
+    fun stopWaitsForHostIdleAndDoesNotEraseTheNextDraft() {
+        val client = FakeRemoteWorkspaceClient()
+        val viewModel = runningMobileSession(client)
+        viewModel.updateComposer("Next question")
+        viewModel.stopTurn()
+        viewModel.stopTurn()
+        assertEquals(1, client.abortCount)
+        assertTrue(viewModel.uiState.value.chat.isRunning)
+        assertTrue(viewModel.uiState.value.chat.isStopping)
+        assertFalse(viewModel.uiState.value.chat.canSubmit)
+        client.fakeEvents.tryEmit(RemoteEvent.TurnChanged("other-session", false))
+        assertTrue(viewModel.uiState.value.chat.isStopping)
+        client.fakeEvents.tryEmit(RemoteEvent.TurnChanged("sess-1", false))
+        assertFalse(viewModel.uiState.value.chat.isStopping)
+        assertFalse(viewModel.uiState.value.chat.isRunning)
+        assertEquals("Next question", viewModel.uiState.value.chat.composerText)
+        assertTrue(viewModel.uiState.value.chat.canSubmit)
+    }
+
+    @Test
+    fun desktopStartedTurnDoesNotOfferAnUnsupportedStop() {
+        val client = FakeRemoteWorkspaceClient()
+        val viewModel = connectedSession(client)
+        client.fakeEvents.tryEmit(RemoteEvent.TurnChanged("sess-1", true, userText = "From desktop"))
+        assertFalse(viewModel.uiState.value.chat.canStop)
+        viewModel.stopTurn()
+        assertEquals(0, client.abortCount)
+    }
+
+    @Test
+    fun rejectedStopKeepsRunningStateAndShowsRecovery() {
+        val client = FakeRemoteWorkspaceClient()
+        val viewModel = runningMobileSession(client)
+        client.acceptAbort = false
+        viewModel.stopTurn()
+        assertTrue(viewModel.uiState.value.chat.isRunning)
+        assertFalse(viewModel.uiState.value.chat.isStopping)
+        assertTrue(viewModel.uiState.value.chat.errorMessage!!.contains("Could not send Stop"))
+        client.setConnection(RemoteConnectionState.Error("Offline"))
+        viewModel.stopTurn()
+        assertEquals(1, client.abortCount)
+    }
+
+    @Test
+    fun stopTimeoutDoesNotPretendTheHostStopped() = runBlocking {
+        val client = FakeRemoteWorkspaceClient()
+        val viewModel = runningMobileSession(client, timeoutMs = 50)
+        viewModel.stopTurn()
+        val state = withTimeout(2000) { viewModel.uiState.first { it.chat.errorMessage != null } }
+        assertTrue(state.chat.isRunning)
+        assertFalse(state.chat.isStopping)
+        assertFalse(state.chat.canSubmit)
+        assertTrue(state.chat.errorMessage!!.contains("has not confirmed Stop"))
+    }
+
+    @Test
+    fun promptTimeoutRequiresRefreshWithoutAutomaticReplay() = runBlocking {
+        val client = FakeRemoteWorkspaceClient()
+        val viewModel = connectedSession(client, timeoutMs = 50)
+        viewModel.updateComposer("Run once")
+        viewModel.submitComposer()
+        val state = withTimeout(2000) { viewModel.uiState.first { it.chat.errorMessage != null } }
+        assertTrue(state.chat.errorMessage!!.contains("has not confirmed this message"))
+        assertEquals(1, client.promptCount)
+        viewModel.submitComposer()
+        assertEquals(1, client.promptCount)
+    }
+
+    @Test
+    fun unrelatedDesktopTurnDoesNotAcknowledgePendingMobilePrompt() {
+        val client = FakeRemoteWorkspaceClient()
+        val viewModel = connectedSession(client)
+        viewModel.updateComposer("Mobile prompt")
+        viewModel.submitComposer()
+        client.fakeEvents.tryEmit(RemoteEvent.TurnChanged("sess-1", true, userText = "Desktop prompt"))
+        assertTrue(viewModel.uiState.value.chat.isAwaitingResponse)
+        assertFalse(viewModel.uiState.value.chat.isMobileTurn)
+        assertEquals("Desktop prompt", viewModel.uiState.value.chat.messages.single().text)
+    }
+
+    private fun runningMobileSession(client: FakeRemoteWorkspaceClient, timeoutMs: Long = 15_000): RoxyAppViewModel {
+        val viewModel = connectedSession(client, timeoutMs)
+        viewModel.updateComposer("Start work")
+        viewModel.submitComposer()
+        client.fakeEvents.tryEmit(RemoteEvent.TurnChanged("sess-1", true))
+        assertTrue(viewModel.uiState.value.chat.canStop)
+        return viewModel
+    }
+
+    private fun connectedSession(client: FakeRemoteWorkspaceClient, timeoutMs: Long = 15_000): RoxyAppViewModel {
+        val viewModel = RoxyAppViewModel(client, FakeRemoteStorage(), CoroutineScope(Dispatchers.Unconfined), timeoutMs)
         client.connect("tok", "123456")
         client.fakeEvents.tryEmit(RemoteEvent.SnapshotReceived("sess-1", emptyList(), emptyList()))
         client.fakeEvents.tryEmit(RemoteEvent.TurnChanged("sess-1", false))

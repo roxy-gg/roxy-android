@@ -63,7 +63,7 @@ interface RemoteWorkspaceClient {
     fun sendPrompt(text: String): Boolean
     fun switchSession(sessionId: String)
     fun refreshSessions()
-    fun abort()
+    fun abort(): Boolean
     fun disconnect()
 }
 
@@ -526,12 +526,13 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
         ws.send(payload.toString())
     }
 
-    override fun abort() {
-        val ws = activeWebSocket ?: return
+    override fun abort(): Boolean {
+        val ws = activeWebSocket ?: return false
+        if (!isHandshakeComplete) return false
         val payload = JSONObject().apply {
             put("t", "abort")
         }
-        ws.send(payload.toString())
+        return ws.send(payload.toString())
     }
 
     override fun disconnect() {

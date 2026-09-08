@@ -38,6 +38,7 @@ class MainActivity : ComponentActivity() {
                     onComposerChange = viewModel::updateComposer,
                     onComposerSubmit = viewModel::submitComposer,
                     onReconnect = viewModel::reconnectRemote,
+                    onStop = viewModel::stopTurn,
                     onToolCallClick = viewModel::toggleToolCall,
                     onAddNewComputer = viewModel::showConnectDialog,
                     onScanQrCode = ::startQrScanner,

@@ -71,6 +71,7 @@ class RemoteWorkspaceClientTest {
     fun promptWithoutALiveSocketIsRejected() {
         val client = DefaultRemoteWorkspaceClient(MemoryRemoteStorage())
         assertFalse(client.sendPrompt("Hello"))
+        assertFalse(client.abort())
         client.handleIncomingMessage("""{"t":"hello-ok"}""")
         assertFalse(client.sendPrompt("Hello"))
     }

@@ -10,15 +10,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowUpward
+import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -41,6 +39,10 @@ fun ChatComposer(
     onSubmit: () -> Unit,
     modifier: Modifier = Modifier,
     canSubmit: Boolean = true,
+    showStop: Boolean = false,
+    canStop: Boolean = false,
+    isStopping: Boolean = false,
+    onStop: () -> Unit = {},
 ) {
     val colors = MaterialTheme.roxyColors
 
@@ -71,7 +73,7 @@ fun ChatComposer(
                     Box {
                         if (text.isEmpty()) {
                             Text(
-                                text = "Ask Roxy anything... (paste or drop images)",
+                                text = "Ask Roxy anything...",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = colors.textMuted,
                             )
@@ -88,26 +90,6 @@ fun ChatComposer(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // Attach button (+)
-                Surface(
-                    onClick = { /* Attach image or file */ },
-                    shape = CircleShape,
-                    color = colors.elevated,
-                    border = BorderStroke(1.dp, colors.edge),
-                    modifier = Modifier.size(30.dp),
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Rounded.Add,
-                            contentDescription = "Attach image or file",
-                            modifier = Modifier.size(16.dp),
-                            tint = colors.textMuted,
-                        )
-                    }
-                }
-
-                Spacer(Modifier.width(8.dp))
-
                 Text(
                     text = "Uses this session's desktop model",
                     style = MaterialTheme.typography.labelSmall,
@@ -115,22 +97,21 @@ fun ChatComposer(
                     modifier = Modifier.weight(1f).padding(end = 8.dp),
                 )
 
-                // Send Button with clean default theme (White when active)
-                val isSendActive = canSubmit && text.isNotBlank()
+                val isActionEnabled = if (showStop) canStop else canSubmit && text.isNotBlank()
                 Surface(
-                    onClick = onSubmit,
-                    enabled = isSendActive,
+                    onClick = if (showStop) onStop else onSubmit,
+                    enabled = isActionEnabled,
                     modifier = Modifier.size(34.dp),
                     shape = RoundedCornerShape(10.dp),
-                    color = if (isSendActive) Color.White else colors.white.copy(alpha = 0.25f),
+                    color = if (isActionEnabled) Color.White else colors.white.copy(alpha = 0.25f),
                     contentColor = Color.Black,
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
-                            imageVector = Icons.Rounded.ArrowUpward,
-                            contentDescription = "Send",
+                            imageVector = if (showStop) Icons.Rounded.Stop else Icons.Rounded.ArrowUpward,
+                            contentDescription = if (showStop) { if (isStopping) "Stopping" else "Stop" } else "Send",
                             modifier = Modifier.size(18.dp),
-                            tint = if (isSendActive) Color.Black else colors.textSubtle,
+                            tint = if (isActionEnabled) Color.Black else colors.textSubtle,
                         )
                     }
                 }
