@@ -246,6 +246,34 @@ class RoxyAppViewModelTest {
         assertEquals("Checking logs now... All clear!", viewModel.uiState.value.chat.messages[1].text)
     }
 
+    @Test
+    fun desktopTurnStreamsCurrentInputReasoningAndOutputOverExistingHistory() {
+        val client = FakeRemoteWorkspaceClient()
+        val viewModel = createViewModel(client = client)
+
+        client.fakeEvents.tryEmit(
+            RemoteEvent.SnapshotReceived(
+                sessionId = "sess-1",
+                messages = listOf(ChatMessageUiModel(id = "old", text = "Previous answer", isUser = false)),
+                tools = emptyList(),
+            )
+        )
+        client.fakeEvents.tryEmit(
+            RemoteEvent.TurnChanged(
+                sessionId = "sess-1",
+                isRunning = true,
+                userText = "Current question",
+            )
+        )
+        client.fakeEvents.tryEmit(RemoteEvent.ReasoningDelta("sess-1", "Working it out"))
+        client.fakeEvents.tryEmit(RemoteEvent.TextDelta("sess-1", "Current answer"))
+
+        val messages = viewModel.uiState.value.chat.messages
+        assertEquals(listOf("Previous answer", "Current question", "Working it out\n\nCurrent answer"), messages.map { it.text })
+        assertTrue(messages[1].isUser)
+        assertTrue(messages[2].parts[0] is ChatPartUiModel.Reasoning)
+        assertTrue(messages[2].parts[1] is ChatPartUiModel.Text)
+    }
 
     @Test
     fun turnChangedKeepsStreamingPartIdsStableAndPreservesReasoning() {

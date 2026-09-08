@@ -40,6 +40,7 @@ sealed interface RemoteEvent {
         val tools: List<ToolCallUiModel>,
     ) : RemoteEvent
     data class TextDelta(val sessionId: String, val chunk: String) : RemoteEvent
+    data class ReasoningDelta(val sessionId: String, val chunk: String) : RemoteEvent
     data class ToolStarted(val sessionId: String, val callId: String, val tool: String, val title: String) : RemoteEvent
     data class ToolDelta(val sessionId: String, val callId: String, val chunk: String) : RemoteEvent
     data class ToolEnded(val sessionId: String, val callId: String, val output: String, val ok: Boolean) : RemoteEvent
@@ -369,6 +370,12 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
                         val delta = eventObj.optString("delta", "")
                         if (delta.isNotEmpty()) {
                             publish(RemoteEvent.TextDelta(sessionId, delta))
+                        }
+                    }
+                    "reasoning" -> {
+                        val delta = eventObj.optString("delta", "")
+                        if (delta.isNotEmpty()) {
+                            publish(RemoteEvent.ReasoningDelta(sessionId, delta))
                         }
                     }
                     "tool-start" -> {

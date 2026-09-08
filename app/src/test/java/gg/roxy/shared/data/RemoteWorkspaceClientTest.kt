@@ -48,6 +48,18 @@ class RemoteWorkspaceClientTest {
     }
 
     @Test
+    fun reasoningDeltaIsPublishedInsteadOfBeingDropped() = runBlocking {
+        val client = DefaultRemoteWorkspaceClient(MemoryRemoteStorage())
+
+        client.handleIncomingMessage(
+            """{"t":"delta","sessionId":"s","event":{"type":"reasoning","delta":"Thinking"}}"""
+        )
+
+        val event = withTimeout(2000) { client.events.first() }
+        assertEquals(RemoteEvent.ReasoningDelta("s", "Thinking"), event)
+    }
+
+    @Test
     fun disconnectedGenerationDoesNotReplayItsTranscript() = runBlocking {
         val client = DefaultRemoteWorkspaceClient(MemoryRemoteStorage())
         client.handleIncomingMessage("""{"t":"snapshot","sessionId":"old","messages":[]}""")

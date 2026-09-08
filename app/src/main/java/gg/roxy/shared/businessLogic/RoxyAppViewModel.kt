@@ -245,40 +245,16 @@ class RoxyAppViewModel(
                     }
                 }
             }
-            is RemoteEvent.TextDelta -> {
-                val current = sessionCache[event.sessionId] ?: SessionChatCache()
-                val cachedMessages = current.messages.toMutableList()
-                if (cachedMessages.isEmpty() || cachedMessages.last().isUser) {
-                    cachedMessages.add(
-                        ChatMessageUiModel(
-                            id = UUID.randomUUID().toString(),
-                            text = event.chunk,
-                            isUser = false,
-                            parts = listOf(ChatPartUiModel.Text(id = UUID.randomUUID().toString(), text = event.chunk)),
-                        )
-                    )
-                } else {
-                    val last = cachedMessages.last()
-                    val parts = last.parts.toMutableList()
-                    val lastPart = parts.lastOrNull()
-                    if (lastPart is ChatPartUiModel.Text) {
-                        parts[parts.lastIndex] = lastPart.copy(text = lastPart.text + event.chunk)
-                    } else {
-                        parts.add(ChatPartUiModel.Text(id = UUID.randomUUID().toString(), text = event.chunk))
-                    }
-                    cachedMessages[cachedMessages.lastIndex] = last.copy(
-                        text = last.text + event.chunk,
-                        parts = parts,
-                    )
-                }
-                sessionCache[event.sessionId] = current.copy(messages = cachedMessages)
-
-                if (activeSessionId == null || activeSessionId == event.sessionId) {
-                    _uiState.update { state ->
-                        state.copy(chat = state.chat.copy(messages = cachedMessages))
-                    }
-                }
-            }
+            is RemoteEvent.TextDelta -> appendStreamingText(
+                sessionId = event.sessionId,
+                chunk = event.chunk,
+                kind = StreamingTextKind.Text,
+            )
+            is RemoteEvent.ReasoningDelta -> appendStreamingText(
+                sessionId = event.sessionId,
+                chunk = event.chunk,
+                kind = StreamingTextKind.Reasoning,
+            )
             is RemoteEvent.ToolStarted -> {
                 val type = if (event.tool.lowercase() in listOf("read", "write", "edit", "glob", "grep", "file", "read_file", "write_file", "list", "list_dir")) {
                     ToolCallType.File
@@ -536,6 +512,73 @@ class RoxyAppViewModel(
                 }
             }
         }
+    }
+
+    private enum class StreamingTextKind(val idSegment: String) {
+        Text("text"),
+        Reasoning("reasoning"),
+    }
+
+    private fun appendStreamingText(sessionId: String, chunk: String, kind: StreamingTextKind) {
+        val current = sessionCache[sessionId] ?: SessionChatCache()
+        val messages = current.messages.toMutableList()
+
+        if (messages.isEmpty() || messages.last().isUser) {
+            val messageId = UUID.randomUUID().toString()
+            messages.add(
+                ChatMessageUiModel(
+                    id = messageId,
+                    text = chunk,
+                    isUser = false,
+                    parts = listOf(createStreamingPart(messageId, 0, chunk, kind)),
+                )
+            )
+        } else {
+            val lastMessage = messages.last()
+            val parts = lastMessage.parts.toMutableList()
+            val lastPart = parts.lastOrNull()
+            val extendsLastPart = when (kind) {
+                StreamingTextKind.Text -> lastPart is ChatPartUiModel.Text
+                StreamingTextKind.Reasoning -> lastPart is ChatPartUiModel.Reasoning
+            }
+
+            if (extendsLastPart) {
+                parts[parts.lastIndex] = when (lastPart) {
+                    is ChatPartUiModel.Text -> lastPart.copy(text = lastPart.text + chunk)
+                    is ChatPartUiModel.Reasoning -> lastPart.copy(text = lastPart.text + chunk)
+                    else -> error("Streaming text can only extend text parts")
+                }
+            } else {
+                parts.add(createStreamingPart(lastMessage.id, parts.size, chunk, kind))
+            }
+
+            val separator = if (lastMessage.text.isNotEmpty() && !extendsLastPart) "\n\n" else ""
+            messages[messages.lastIndex] = lastMessage.copy(
+                text = lastMessage.text + separator + chunk,
+                parts = parts,
+            )
+        }
+
+        sessionCache[sessionId] = current.copy(messages = messages)
+        if (activeSessionId == null || activeSessionId == sessionId) {
+            _uiState.update { state -> state.copy(chat = state.chat.copy(messages = messages)) }
+        }
+    }
+
+    private fun createStreamingPart(
+        messageId: String,
+        index: Int,
+        text: String,
+        kind: StreamingTextKind,
+    ): ChatPartUiModel = when (kind) {
+        StreamingTextKind.Text -> ChatPartUiModel.Text(
+            id = "$messageId-${kind.idSegment}-$index",
+            text = text,
+        )
+        StreamingTextKind.Reasoning -> ChatPartUiModel.Reasoning(
+            id = "$messageId-${kind.idSegment}-$index",
+            text = text,
+        )
     }
 
     private fun isSessionReady(sessionId: String): Boolean =
