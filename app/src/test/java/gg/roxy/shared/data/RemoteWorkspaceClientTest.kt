@@ -4,9 +4,12 @@ import gg.roxy.chatFullscreen.businessLogic.ChatPartUiModel
 import gg.roxy.chatFullscreen.businessLogic.ToolCallStatus
 import gg.roxy.chatFullscreen.businessLogic.ToolCallType
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -26,6 +29,43 @@ class MemoryRemoteStorage : RemoteStorage {
 }
 
 class RemoteWorkspaceClientTest {
+
+    @Test
+    fun burstEventsKeepWireOrderEvenWhenTheConsumerIsSlow() = runBlocking {
+        val client = DefaultRemoteWorkspaceClient(MemoryRemoteStorage())
+        val received = mutableListOf<String>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) {
+            client.events.take(100).collect {
+                delay(1)
+                received.add((it as RemoteEvent.TextDelta).chunk)
+            }
+        }
+        repeat(100) { index ->
+            client.handleIncomingMessage("""{"t":"delta","sessionId":"s","event":{"type":"text","delta":"$index"}}""")
+        }
+        withTimeout(5000) { job.join() }
+        assertEquals((0 until 100).map { it.toString() }, received)
+    }
+
+    @Test
+    fun disconnectedGenerationDoesNotReplayItsTranscript() = runBlocking {
+        val client = DefaultRemoteWorkspaceClient(MemoryRemoteStorage())
+        client.handleIncomingMessage("""{"t":"snapshot","sessionId":"old","messages":[]}""")
+        withTimeout(2000) { client.events.first() }
+        client.disconnect()
+        client.handleIncomingMessage("""{"t":"snapshot","sessionId":"new","messages":[]}""")
+        val event = withTimeout(2000) { client.events.first() } as RemoteEvent.SnapshotReceived
+        assertEquals("new", event.sessionId)
+    }
+
+    @Test
+    fun hostOfflineRetiresTheConnection() {
+        val client = DefaultRemoteWorkspaceClient(MemoryRemoteStorage())
+        client.handleIncomingMessage("""{"t":"hello-ok"}""")
+        client.handleIncomingMessage("""{"t":"host-offline"}""")
+        assertTrue(client.connectionState.value is RemoteConnectionState.Error)
+        assertFalse(client.sendPrompt("Do not send"))
+    }
 
     @Test
     fun promptWithoutALiveSocketIsRejected() {

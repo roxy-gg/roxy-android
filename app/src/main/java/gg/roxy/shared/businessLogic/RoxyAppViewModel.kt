@@ -401,10 +401,13 @@ class RoxyAppViewModel(
                 turnsReceived.add(event.sessionId)
                 val current = sessionCache[event.sessionId] ?: SessionChatCache()
                 val currentMessages = current.messages.toMutableList()
+                val confirmsPendingPrompt = event.isRunning && current.pendingPrompt != null &&
+                    (event.userText == current.pendingPrompt.text ||
+                        (event.userText == null && current.queuedPromptCount == 0))
                 if (event.isRunning && current.pendingPrompt != null && current.queuedPromptCount == 0 && event.userText == null) {
                     currentMessages.add(current.pendingPrompt)
                 }
-                if (event.isRunning && (event.userText == current.pendingPrompt?.text || current.queuedPromptCount == 0)) {
+                if (confirmsPendingPrompt) {
                     responseTimeoutJobs.remove(event.sessionId)?.cancel()
                 }
                 if (event.userText != null && (currentMessages.isEmpty() || currentMessages.last().text != event.userText)) {
@@ -471,7 +474,7 @@ class RoxyAppViewModel(
                     isRunning = event.isRunning,
                     messages = currentMessages,
                     toolCalls = currentTools,
-                    pendingPrompt = if (event.isRunning && (event.userText == current.pendingPrompt?.text || current.queuedPromptCount == 0)) null else current.pendingPrompt,
+                    pendingPrompt = if (confirmsPendingPrompt) null else current.pendingPrompt,
                 )
 
                 if (activeSessionId == null || activeSessionId == event.sessionId) {
@@ -758,6 +761,7 @@ class RoxyAppViewModel(
                 ),
             )
         }
+        remoteClient.switchSession(sessionId)
     }
 
     fun showMainScreen() {
@@ -769,7 +773,6 @@ class RoxyAppViewModel(
             val cached = sessionCache[sessionId] ?: SessionChatCache()
             sessionCache[sessionId] = cached.copy(draft = text)
         }
-        remoteClient.switchSession(sessionId)
         _uiState.update { state ->
             state.copy(chat = state.chat.copy(composerText = text))
         }

@@ -442,16 +442,15 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
                 }
 
                 publish(
-                        RemoteEvent.TurnChanged(
-                            sessionId = sessionId,
-                            isRunning = isRunning,
-                            userText = userText,
-                            inFlightText = textParts.takeIf { it.isNotEmpty()?.joinToString("\n\n"),
-                            inFlightParts = inFlightParts,
-                            inFlightTools = inFlightTools,
-                        )
+                    RemoteEvent.TurnChanged(
+                        sessionId = sessionId,
+                        isRunning = isRunning,
+                        userText = userText,
+                        inFlightText = textParts.takeIf { it.isNotEmpty() }?.joinToString("\n\n"),
+                        inFlightParts = inFlightParts,
+                        inFlightTools = inFlightTools,
                     )
-                }
+                )
             }
             "error" -> {
                 val msg = json.optString("message", "Unknown error from remote host")

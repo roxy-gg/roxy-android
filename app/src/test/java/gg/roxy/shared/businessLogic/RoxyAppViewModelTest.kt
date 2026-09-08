@@ -530,6 +530,96 @@ class RoxyAppViewModelTest {
         assertEquals("Draft two", viewModel.uiState.value.chat.composerText)
     }
 
+    @Test
+    fun onlyOnePromptCanBeOutstandingOrRunning() {
+        val client = FakeRemoteWorkspaceClient()
+        val viewModel = connectedSession(client)
+        viewModel.updateComposer("First")
+        viewModel.submitComposer()
+        viewModel.updateComposer("Second")
+        viewModel.submitComposer()
+        assertEquals(1, client.promptCount)
+        assertEquals("Second", viewModel.uiState.value.chat.composerText)
+        assertTrue(viewModel.uiState.value.chat.isAwaitingResponse)
+
+        client.fakeEvents.tryEmit(RemoteEvent.TurnChanged("sess-1", true))
+        assertEquals("First", viewModel.uiState.value.chat.messages.single().text)
+        viewModel.submitComposer()
+        assertEquals(1, client.promptCount)
+        client.fakeEvents.tryEmit(RemoteEvent.TurnChanged("sess-1", false))
+        viewModel.submitComposer()
+        assertEquals(2, client.promptCount)
+    }
+
+    @Test
+    fun remoteErrorIsVisibleAndRefreshRequiresBothSnapshotAndTurn() {
+        val client = FakeRemoteWorkspaceClient()
+        val viewModel = connectedSession(client)
+        viewModel.updateComposer("Draft")
+        client.fakeEvents.tryEmit(RemoteEvent.ErrorReceived("Provider unavailable"))
+        assertEquals("Provider unavailable", viewModel.uiState.value.chat.errorMessage)
+        assertFalse(viewModel.uiState.value.chat.canSubmit)
+
+        viewModel.reconnectRemote()
+        client.fakeEvents.tryEmit(RemoteEvent.SnapshotReceived("sess-1", emptyList(), emptyList()))
+        assertFalse(viewModel.uiState.value.chat.canSubmit)
+        client.fakeEvents.tryEmit(RemoteEvent.TurnChanged("sess-1", false))
+        assertTrue(viewModel.uiState.value.chat.canSubmit)
+        assertEquals("Draft", viewModel.uiState.value.chat.composerText)
+    }
+
+    @Test
+    fun previousSessionsUpdatesCannotEnableSendForNewSession() {
+        val client = FakeRemoteWorkspaceClient()
+        val viewModel = connectedSession(client)
+        client.fakeEvents.tryEmit(RemoteEvent.SessionsReceived(listOf(
+            RemoteSessionInfo("sess-1", "One", "Project"),
+            RemoteSessionInfo("sess-2", "Two", "Project"),
+        ), "sess-1"))
+        viewModel.openSession("sess-2")
+        viewModel.updateComposer("For session two")
+        client.fakeEvents.tryEmit(RemoteEvent.SnapshotReceived("sess-1", emptyList(), emptyList()))
+        client.fakeEvents.tryEmit(RemoteEvent.TurnChanged("sess-1", false))
+        viewModel.submitComposer()
+        assertEquals(0, client.promptCount)
+        client.fakeEvents.tryEmit(RemoteEvent.TurnChanged("sess-2", false))
+        assertFalse(viewModel.uiState.value.chat.canSubmit)
+        client.fakeEvents.tryEmit(RemoteEvent.SnapshotReceived("sess-2", emptyList(), emptyList()))
+        assertTrue(viewModel.uiState.value.chat.canSubmit)
+    }
+
+    @Test
+    fun queuedMobilePromptDoesNotSplitTheCurrentAssistantReply() {
+        val client = FakeRemoteWorkspaceClient()
+        val viewModel = connectedSession(client)
+        client.fakeEvents.tryEmit(RemoteEvent.SnapshotReceived("sess-1", listOf(
+            ChatMessageUiModel("assistant", "Current reply"),
+        ), emptyList()))
+        viewModel.updateComposer("My queued prompt")
+        viewModel.submitComposer()
+        client.fakeEvents.tryEmit(RemoteEvent.QueueChanged("sess-1", 1))
+        client.fakeEvents.tryEmit(RemoteEvent.TextDelta("sess-1", " finished"))
+        assertEquals("Current reply finished", viewModel.uiState.value.chat.messages.single().text)
+        client.fakeEvents.tryEmit(RemoteEvent.QueueChanged("sess-1", 0))
+        client.fakeEvents.tryEmit(RemoteEvent.TurnChanged("sess-1", true, userText = "My queued prompt"))
+        client.fakeEvents.tryEmit(RemoteEvent.TextDelta("sess-1", "New reply"))
+        assertEquals(listOf("Current reply finished", "My queued prompt", "New reply"),
+            viewModel.uiState.value.chat.messages.map { it.text })
+        assertFalse(viewModel.uiState.value.chat.isAwaitingResponse)
+    }
+
+    @Test
+    fun desktopQueueBlocksNewMobilePrompts() {
+        val client = FakeRemoteWorkspaceClient()
+        val viewModel = connectedSession(client)
+        client.fakeEvents.tryEmit(RemoteEvent.QueueChanged("sess-1", 2))
+        viewModel.updateComposer("Wait for the queue")
+        viewModel.submitComposer()
+        assertEquals(0, client.promptCount)
+        client.fakeEvents.tryEmit(RemoteEvent.QueueChanged("sess-1", 0))
+        assertTrue(viewModel.uiState.value.chat.canSubmit)
+    }
+
     private fun connectedSession(client: FakeRemoteWorkspaceClient): RoxyAppViewModel {
         val viewModel = createViewModel(client)
         client.connect("tok", "123456")
