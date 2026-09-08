@@ -481,13 +481,16 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
     }
 
     override fun sendPrompt(text: String): Boolean {
+        val generation = connectionGeneration
         val ws = activeWebSocket ?: return false
         if (!isHandshakeComplete || text.isBlank()) return false
         val payload = JSONObject().apply {
             put("t", "prompt")
             put("text", text)
         }
-        return ws.send(payload.toString())
+        if (ws.send(payload.toString())) return true
+        failConnection("Could not send your message. Reconnect to your PC.", generation)
+        return false
     }
 
     override fun switchSession(sessionId: String) {

@@ -555,6 +555,8 @@ class RoxyAppViewModelTest {
         viewModel.submitComposer()
         assertEquals(1, client.promptCount)
         client.fakeEvents.tryEmit(RemoteEvent.TurnChanged("sess-1", false))
+        client.fakeEvents.tryEmit(RemoteEvent.SnapshotReceived("sess-1", viewModel.uiState.value.chat.messages, emptyList()))
+        client.fakeEvents.tryEmit(RemoteEvent.TurnChanged("sess-1", false))
         viewModel.submitComposer()
         assertEquals(2, client.promptCount)
     }
@@ -645,6 +647,9 @@ class RoxyAppViewModelTest {
         assertFalse(viewModel.uiState.value.chat.isStopping)
         assertFalse(viewModel.uiState.value.chat.isRunning)
         assertEquals("Next question", viewModel.uiState.value.chat.composerText)
+        assertFalse(viewModel.uiState.value.chat.canSubmit)
+        client.fakeEvents.tryEmit(RemoteEvent.SnapshotReceived("sess-1", viewModel.uiState.value.chat.messages, emptyList()))
+        client.fakeEvents.tryEmit(RemoteEvent.TurnChanged("sess-1", false))
         assertTrue(viewModel.uiState.value.chat.canSubmit)
     }
 
@@ -707,6 +712,46 @@ class RoxyAppViewModelTest {
         assertTrue(viewModel.uiState.value.chat.isAwaitingResponse)
         assertFalse(viewModel.uiState.value.chat.isMobileTurn)
         assertEquals("Desktop prompt", viewModel.uiState.value.chat.messages.single().text)
+    }
+
+    @Test
+    fun completedMobileTurnRefreshesThePersistedReplyIncludingProviderErrors() {
+        val client = FakeRemoteWorkspaceClient()
+        val viewModel = runningMobileSession(client)
+        client.fakeEvents.tryEmit(RemoteEvent.TurnChanged("sess-1", false))
+        assertEquals("sess-1", client.lastSwitchedSession)
+        assertTrue(viewModel.uiState.value.chat.isSyncing)
+        client.fakeEvents.tryEmit(RemoteEvent.SnapshotReceived("sess-1", listOf(
+            ChatMessageUiModel("user", "Start work", isUser = true),
+            ChatMessageUiModel("reply", "Model request failed."),
+        ), emptyList()))
+        client.fakeEvents.tryEmit(RemoteEvent.TurnChanged("sess-1", false))
+        assertEquals("Model request failed.", viewModel.uiState.value.chat.messages.last().text)
+        assertFalse(viewModel.uiState.value.chat.isSyncing)
+    }
+
+    @Test
+    fun pairingAnotherPcClearsThePreviousPcsSessionListAndDraft() {
+        val client = FakeRemoteWorkspaceClient()
+        val viewModel = connectedSession(client)
+        client.fakeEvents.tryEmit(RemoteEvent.SessionsReceived(listOf(RemoteSessionInfo("sess-1", "One", "Old PC")), "sess-1"))
+        viewModel.updateComposer("Private draft")
+        viewModel.connectRemote("different-token", "123456")
+        assertTrue(viewModel.uiState.value.main.projects.isEmpty())
+        assertTrue(viewModel.uiState.value.chat.composerText.isEmpty())
+        assertTrue(viewModel.uiState.value.chat.messages.isEmpty())
+    }
+
+    @Test
+    fun syncTimeoutOffersRecoveryAndKeepsDraft() = runBlocking {
+        val client = FakeRemoteWorkspaceClient()
+        val viewModel = connectedSession(client, timeoutMs = 50)
+        viewModel.updateComposer("Keep draft")
+        viewModel.reconnectRemote()
+        val state = withTimeout(2000) { viewModel.uiState.first { it.chat.errorMessage != null } }
+        assertFalse(state.chat.isSyncing)
+        assertFalse(state.chat.canSubmit)
+        assertEquals("Keep draft", state.chat.composerText)
     }
 
     private fun runningMobileSession(client: FakeRemoteWorkspaceClient, timeoutMs: Long = 15_000): RoxyAppViewModel {

@@ -237,7 +237,7 @@ class RoxyAppViewModel(
                                 messages = event.messages,
                                 toolCalls = allTools,
                                 isSyncing = false,
-                                isSessionReady = isSessionReady(event.sessionId),
+                                isSessionReady = isSessionReady(event.sessionId) && state.chat.errorMessage == null,
                                 isAwaitingResponse = false,
                                 isMobileTurn = current.isMobileTurn,
                             )
@@ -504,6 +504,13 @@ class RoxyAppViewModel(
                             )
                         )
                     }
+                    // The host persists the final reply (including provider errors)
+                    // before sending idle. Fetch it once to reconcile the stream.
+                    if (!event.isRunning && current.isRunning && current.isMobileTurn &&
+                        current.errorMessage == null && _uiState.value.chat.isConnected && activeSessionId == event.sessionId) {
+                        beginSessionSync(event.sessionId)
+                        remoteClient.switchSession(event.sessionId)
+                    }
                 }
             }
             is RemoteEvent.ErrorReceived -> {
@@ -660,12 +667,20 @@ class RoxyAppViewModel(
 
     fun connectRemote(tokenOrUrl: String, pin: String) {
         val token = RemoteWorkspaceUtils.extractGuestToken(tokenOrUrl)
+        if (token.isBlank() || pin.trim().length != PAIRING_PIN_LENGTH) {
+            remoteClient.connect(tokenOrUrl, pin)
+            return
+        }
         if (token != pairingToken) {
             sessionCache.clear()
             activeSessionId = null
             snapshotsReceived.clear()
             turnsReceived.clear()
-            _uiState.update { it.copy(destination = RoxyDestination.Main, chat = initialUiState().chat) }
+            _uiState.update { it.copy(
+                destination = RoxyDestination.Main,
+                main = it.main.copy(projects = emptyList()),
+                chat = initialUiState().chat,
+            ) }
         }
         pairingToken = token
         remoteClient.connect(tokenOrUrl, pin)
@@ -801,7 +816,10 @@ class RoxyAppViewModel(
         if (!chat.canSubmit || remoteClient.connectionState.value !is RemoteConnectionState.Connected) return
         val currentText = chat.composerText.trim()
         if (!remoteClient.sendPrompt(currentText)) {
-            _uiState.update { it.copy(chat = it.chat.copy(errorMessage = "Message was not sent. Your draft is saved. Reconnect and try again.")) }
+            _uiState.update { it.copy(chat = it.chat.copy(
+                isSessionReady = false,
+                errorMessage = "Message was not sent. Your draft is saved. Refresh or reconnect before trying again.",
+            )) }
             return
         }
 
