@@ -14,6 +14,7 @@ import gg.roxy.mainFullscreen.businessLogic.ComputerUiModel
 import gg.roxy.mainFullscreen.businessLogic.MainFullScreenUiState
 import gg.roxy.mainFullscreen.businessLogic.ProjectUiModel
 import gg.roxy.mainFullscreen.businessLogic.SessionUiModel
+import gg.roxy.shared.PAIRING_PIN_LENGTH
 import gg.roxy.shared.data.RemoteConnectionState
 import gg.roxy.shared.data.RemoteEvent
 import gg.roxy.shared.data.RemoteSessionInfo
@@ -23,6 +24,8 @@ import gg.roxy.shared.data.RemoteWorkspaceUtils
 import java.util.UUID
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -46,6 +49,7 @@ class RoxyAppViewModel(
     private val remoteClient: RemoteWorkspaceClient,
     private val storage: RemoteStorage,
     private val externalScope: CoroutineScope? = null,
+    private val operationTimeoutMs: Long = 15_000,
 ) : ViewModel() {
 
     @Inject
@@ -61,11 +65,23 @@ class RoxyAppViewModel(
     val uiState: StateFlow<RoxyAppUiState> = _uiState.asStateFlow()
 
     private var activeSessionId: String? = null
+    private var pairingToken: String? = storage.savedToken
+    private val snapshotsReceived = mutableSetOf<String>()
+    private val turnsReceived = mutableSetOf<String>()
+    private var syncTimeoutJob: Job? = null
+    private val responseTimeoutJobs = mutableMapOf<String, Job>()
+    private val stopTimeoutJobs = mutableMapOf<String, Job>()
 
     private data class SessionChatCache(
         val messages: List<ChatMessageUiModel> = emptyList(),
         val toolCalls: List<ToolCallUiModel> = emptyList(),
         val isRunning: Boolean = false,
+        val draft: String = "",
+        val pendingPrompt: ChatMessageUiModel? = null,
+        val queuedPromptCount: Int = 0,
+        val errorMessage: String? = null,
+        val isMobileTurn: Boolean = false,
+        val isStopping: Boolean = false,
     )
 
     private val sessionCache = mutableMapOf<String, SessionChatCache>()
@@ -82,10 +98,21 @@ class RoxyAppViewModel(
     private fun observeRemote() {
         scope.launch {
             remoteClient.connectionState.collect { connectionState ->
+                if (connectionState !is RemoteConnectionState.Connected) {
+                    snapshotsReceived.clear()
+                    turnsReceived.clear()
+                    syncTimeoutJob?.cancel()
+                    responseTimeoutJobs.values.forEach { it.cancel() }
+                    responseTimeoutJobs.clear()
+                    stopTimeoutJobs.values.forEach { it.cancel() }
+                    stopTimeoutJobs.clear()
+                    sessionCache.replaceAll { _, cached -> cached.copy(isStopping = false) }
+                }
                 _uiState.update { state ->
                     when (connectionState) {
                         is RemoteConnectionState.Connecting -> {
                             state.copy(
+                                chat = state.chat.copy(isConnected = false, isConnecting = true, isSessionReady = false, errorMessage = null),
                                 main = state.main.copy(
                                     isConnecting = true,
                                     connectionError = null,
@@ -104,6 +131,7 @@ class RoxyAppViewModel(
                                 isConnected = true,
                             )
                             state.copy(
+                                chat = state.chat.copy(isConnected = true, isConnecting = false, errorMessage = null),
                                 main = state.main.copy(
                                     selectedComputer = pc,
                                     computers = listOf(pc),
@@ -116,6 +144,15 @@ class RoxyAppViewModel(
                         }
                         is RemoteConnectionState.Error -> {
                             state.copy(
+                                chat = state.chat.copy(
+                                    isConnected = false,
+                                    isSessionReady = false,
+                                    isConnecting = false,
+                                    isRunning = false,
+                                    isStopping = false,
+                                    isSyncing = false,
+                                    errorMessage = connectionState.message,
+                                ),
                                 main = state.main.copy(
                                     isConnecting = false,
                                     connectionError = connectionState.message,
@@ -127,8 +164,6 @@ class RoxyAppViewModel(
                             )
                         }
                         is RemoteConnectionState.Disconnected -> {
-                            sessionCache.clear()
-                            activeSessionId = null
                             val emptyPc = ComputerUiModel(
                                 id = "none",
                                 name = "No computer connected",
@@ -136,22 +171,28 @@ class RoxyAppViewModel(
                                 isConnected = false,
                             )
                             state.copy(
-                                destination = RoxyDestination.Main,
                                 main = state.main.copy(
                                     isConnecting = false,
                                     selectedComputer = emptyPc,
                                     computers = emptyList(),
-                                    projects = emptyList(),
                                 ),
                                 chat = state.chat.copy(
-                                    sessionTitle = "",
-                                    projectName = "",
-                                    messages = emptyList(),
-                                    toolCalls = emptyList(),
+                                    isConnected = false,
+                                    isSessionReady = false,
+                                    isConnecting = false,
+                                    isRunning = false,
+                                    isStopping = false,
                                     isSyncing = false,
+                                    errorMessage = if (activeSessionId != null) "Connection lost. Reconnect before sending another message." else null,
                                 ),
                             )
                         }
+                    }
+                }
+                if (connectionState is RemoteConnectionState.Connected) {
+                    activeSessionId?.let { sessionId ->
+                        beginSessionSync(sessionId)
+                        remoteClient.switchSession(sessionId)
                     }
                 }
             }
@@ -173,6 +214,7 @@ class RoxyAppViewModel(
                 }
             }
             is RemoteEvent.SnapshotReceived -> {
+                snapshotsReceived.add(event.sessionId)
                 val current = sessionCache[event.sessionId] ?: SessionChatCache()
                 val allTools = if (event.tools.isNotEmpty()) {
                     event.tools
@@ -182,6 +224,7 @@ class RoxyAppViewModel(
                 sessionCache[event.sessionId] = current.copy(
                     messages = event.messages,
                     toolCalls = allTools,
+                    pendingPrompt = null,
                 )
 
                 if (activeSessionId == null || activeSessionId == event.sessionId) {
@@ -194,45 +237,24 @@ class RoxyAppViewModel(
                                 messages = event.messages,
                                 toolCalls = allTools,
                                 isSyncing = false,
+                                isSessionReady = isSessionReady(event.sessionId) && state.chat.errorMessage == null,
+                                isAwaitingResponse = false,
+                                isMobileTurn = current.isMobileTurn,
                             )
                         )
                     }
                 }
             }
-            is RemoteEvent.TextDelta -> {
-                val current = sessionCache[event.sessionId] ?: SessionChatCache()
-                val cachedMessages = current.messages.toMutableList()
-                if (cachedMessages.isEmpty() || cachedMessages.last().isUser) {
-                    cachedMessages.add(
-                        ChatMessageUiModel(
-                            id = UUID.randomUUID().toString(),
-                            text = event.chunk,
-                            isUser = false,
-                            parts = listOf(ChatPartUiModel.Text(id = UUID.randomUUID().toString(), text = event.chunk)),
-                        )
-                    )
-                } else {
-                    val last = cachedMessages.last()
-                    val parts = last.parts.toMutableList()
-                    val lastPart = parts.lastOrNull()
-                    if (lastPart is ChatPartUiModel.Text) {
-                        parts[parts.lastIndex] = lastPart.copy(text = lastPart.text + event.chunk)
-                    } else {
-                        parts.add(ChatPartUiModel.Text(id = UUID.randomUUID().toString(), text = event.chunk))
-                    }
-                    cachedMessages[cachedMessages.lastIndex] = last.copy(
-                        text = last.text + event.chunk,
-                        parts = parts,
-                    )
-                }
-                sessionCache[event.sessionId] = current.copy(messages = cachedMessages)
-
-                if (activeSessionId == null || activeSessionId == event.sessionId) {
-                    _uiState.update { state ->
-                        state.copy(chat = state.chat.copy(messages = cachedMessages))
-                    }
-                }
-            }
+            is RemoteEvent.TextDelta -> appendStreamingText(
+                sessionId = event.sessionId,
+                chunk = event.chunk,
+                kind = StreamingTextKind.Text,
+            )
+            is RemoteEvent.ReasoningDelta -> appendStreamingText(
+                sessionId = event.sessionId,
+                chunk = event.chunk,
+                kind = StreamingTextKind.Reasoning,
+            )
             is RemoteEvent.ToolStarted -> {
                 val type = if (event.tool.lowercase() in listOf("read", "write", "edit", "glob", "grep", "file", "read_file", "write_file", "list", "list_dir")) {
                     ToolCallType.File
@@ -362,8 +384,19 @@ class RoxyAppViewModel(
                 }
             }
             is RemoteEvent.TurnChanged -> {
+                turnsReceived.add(event.sessionId)
                 val current = sessionCache[event.sessionId] ?: SessionChatCache()
                 val currentMessages = current.messages.toMutableList()
+                val confirmsPendingPrompt = event.isRunning && current.pendingPrompt != null &&
+                    (event.userText == current.pendingPrompt.text ||
+                        (event.userText == null && current.queuedPromptCount == 0))
+                if (event.isRunning && current.pendingPrompt != null && current.queuedPromptCount == 0 && event.userText == null) {
+                    currentMessages.add(current.pendingPrompt)
+                }
+                if (confirmsPendingPrompt) {
+                    responseTimeoutJobs.remove(event.sessionId)?.cancel()
+                }
+                if (!event.isRunning) stopTimeoutJobs.remove(event.sessionId)?.cancel()
                 if (event.userText != null && (currentMessages.isEmpty() || currentMessages.last().text != event.userText)) {
                     currentMessages.add(
                         ChatMessageUiModel(
@@ -374,24 +407,39 @@ class RoxyAppViewModel(
                     )
                 }
 
-                if (event.inFlightTools.isNotEmpty() || event.inFlightText != null) {
-                    val inFlightParts = mutableListOf<ChatPartUiModel>()
-                    event.inFlightTools.forEach { tool ->
-                        inFlightParts.add(ChatPartUiModel.Tool(tool))
-                    }
-                    if (event.inFlightText != null) {
-                        inFlightParts.add(
-                            ChatPartUiModel.Text(
-                                id = UUID.randomUUID().toString(),
-                                text = event.inFlightText,
-                            )
-                        )
+                if (event.inFlightParts.isNotEmpty() || event.inFlightTools.isNotEmpty() || event.inFlightText != null) {
+                    // Row keys have to be derived from the message that owns the
+                    // turn. A fresh id per event would rebuild streaming rows on
+                    // every chunk, discarding layout state and making the list
+                    // treat the update as a removal plus an insertion.
+                    val isNewTurn = currentMessages.isEmpty() || currentMessages.last().isUser
+                    val turnId = if (isNewTurn) {
+                        UUID.randomUUID().toString()
+                    } else {
+                        currentMessages.last().id
                     }
 
-                    if (currentMessages.isEmpty() || currentMessages.last().isUser) {
+                    val inFlightParts = if (event.inFlightParts.isNotEmpty()) {
+                        event.inFlightParts.map { part ->
+                            when (part) {
+                                is ChatPartUiModel.Text -> part.copy(id = "$turnId-text-${sourcePartIndex(part.id)}")
+                                is ChatPartUiModel.Reasoning -> part.copy(id = "$turnId-reasoning-${sourcePartIndex(part.id)}")
+                                is ChatPartUiModel.Tool -> part
+                            }
+                        }
+                    } else {
+                        buildList {
+                            event.inFlightTools.forEach { tool -> add(ChatPartUiModel.Tool(tool)) }
+                            event.inFlightText?.let { text ->
+                                add(ChatPartUiModel.Text(id = "$turnId-text-0", text = text))
+                            }
+                        }
+                    }
+
+                    if (isNewTurn) {
                         currentMessages.add(
                             ChatMessageUiModel(
-                                id = UUID.randomUUID().toString(),
+                                id = turnId,
                                 isUser = false,
                                 parts = inFlightParts,
                             )
@@ -413,6 +461,9 @@ class RoxyAppViewModel(
                     isRunning = event.isRunning,
                     messages = currentMessages,
                     toolCalls = currentTools,
+                    pendingPrompt = if (confirmsPendingPrompt) null else current.pendingPrompt,
+                    isMobileTurn = event.isRunning && (confirmsPendingPrompt || (current.isMobileTurn && event.userText == null)),
+                    isStopping = event.isRunning && current.isStopping,
                 )
 
                 if (activeSessionId == null || activeSessionId == event.sessionId) {
@@ -422,17 +473,128 @@ class RoxyAppViewModel(
                                 isRunning = event.isRunning,
                                 messages = currentMessages,
                                 toolCalls = currentTools,
+                                isSessionReady = isSessionReady(event.sessionId) && state.chat.errorMessage == null,
+                                isAwaitingResponse = sessionCache[event.sessionId]?.pendingPrompt != null,
+                                isMobileTurn = sessionCache[event.sessionId]?.isMobileTurn ?: false,
+                                isStopping = sessionCache[event.sessionId]?.isStopping ?: false,
                             )
                         )
+                    }
+                    // The host persists the final reply (including provider errors)
+                    // before sending idle. Fetch it once to reconcile the stream.
+                    if (!event.isRunning && current.isRunning && current.isMobileTurn &&
+                        current.errorMessage == null && _uiState.value.chat.isConnected && activeSessionId == event.sessionId) {
+                        beginSessionSync(event.sessionId)
+                        remoteClient.switchSession(event.sessionId)
                     }
                 }
             }
             is RemoteEvent.ErrorReceived -> {
+                val sessionId = activeSessionId
+                sessionId?.let {
+                    val current = sessionCache[it] ?: SessionChatCache()
+                    sessionCache[it] = current.copy(errorMessage = event.message, pendingPrompt = null)
+                    responseTimeoutJobs.remove(it)?.cancel()
+                }
                 _uiState.update { state ->
                     state.copy(
-                        main = state.main.copy(connectionError = event.message)
+                        main = state.main.copy(connectionError = event.message),
+                        chat = state.chat.copy(errorMessage = event.message, isSessionReady = false, isSyncing = false, isAwaitingResponse = false),
                     )
                 }
+            }
+            is RemoteEvent.QueueChanged -> {
+                val current = sessionCache[event.sessionId] ?: SessionChatCache()
+                sessionCache[event.sessionId] = current.copy(queuedPromptCount = event.count)
+                if (event.count > 0) responseTimeoutJobs.remove(event.sessionId)?.cancel()
+                if (activeSessionId == event.sessionId) {
+                    _uiState.update { it.copy(chat = it.chat.copy(queuedPromptCount = event.count)) }
+                }
+            }
+        }
+    }
+
+    private enum class StreamingTextKind(val idSegment: String) {
+        Text("text"),
+        Reasoning("reasoning"),
+    }
+
+    private fun appendStreamingText(sessionId: String, chunk: String, kind: StreamingTextKind) {
+        val current = sessionCache[sessionId] ?: SessionChatCache()
+        val messages = current.messages.toMutableList()
+
+        if (messages.isEmpty() || messages.last().isUser) {
+            val messageId = UUID.randomUUID().toString()
+            messages.add(
+                ChatMessageUiModel(
+                    id = messageId,
+                    text = chunk,
+                    isUser = false,
+                    parts = listOf(createStreamingPart(messageId, 0, chunk, kind)),
+                )
+            )
+        } else {
+            val lastMessage = messages.last()
+            val parts = lastMessage.parts.toMutableList()
+            val lastPart = parts.lastOrNull()
+            val extendsLastPart = when (kind) {
+                StreamingTextKind.Text -> lastPart is ChatPartUiModel.Text
+                StreamingTextKind.Reasoning -> lastPart is ChatPartUiModel.Reasoning
+            }
+
+            if (extendsLastPart) {
+                parts[parts.lastIndex] = when (lastPart) {
+                    is ChatPartUiModel.Text -> lastPart.copy(text = lastPart.text + chunk)
+                    is ChatPartUiModel.Reasoning -> lastPart.copy(text = lastPart.text + chunk)
+                    else -> error("Streaming text can only extend text parts")
+                }
+            } else {
+                parts.add(createStreamingPart(lastMessage.id, parts.size, chunk, kind))
+            }
+
+            val separator = if (lastMessage.text.isNotEmpty() && !extendsLastPart) "\n\n" else ""
+            messages[messages.lastIndex] = lastMessage.copy(
+                text = lastMessage.text + separator + chunk,
+                parts = parts,
+            )
+        }
+
+        sessionCache[sessionId] = current.copy(messages = messages)
+        if (activeSessionId == null || activeSessionId == sessionId) {
+            _uiState.update { state -> state.copy(chat = state.chat.copy(messages = messages)) }
+        }
+    }
+
+    private fun createStreamingPart(
+        messageId: String,
+        index: Int,
+        text: String,
+        kind: StreamingTextKind,
+    ): ChatPartUiModel = when (kind) {
+        StreamingTextKind.Text -> ChatPartUiModel.Text(
+            id = "$messageId-${kind.idSegment}-$index",
+            text = text,
+        )
+        StreamingTextKind.Reasoning -> ChatPartUiModel.Reasoning(
+            id = "$messageId-${kind.idSegment}-$index",
+            text = text,
+        )
+    }
+
+    private fun isSessionReady(sessionId: String): Boolean =
+        sessionId in snapshotsReceived && sessionId in turnsReceived
+
+    private fun beginSessionSync(sessionId: String) {
+        snapshotsReceived.remove(sessionId)
+        turnsReceived.remove(sessionId)
+        val cached = sessionCache[sessionId] ?: SessionChatCache()
+        sessionCache[sessionId] = cached.copy(errorMessage = null)
+        _uiState.update { it.copy(chat = it.chat.copy(isSyncing = true, isSessionReady = false, errorMessage = null)) }
+        syncTimeoutJob?.cancel()
+        syncTimeoutJob = scope.launch {
+            delay(operationTimeoutMs)
+            if (activeSessionId == sessionId && !isSessionReady(sessionId)) {
+                _uiState.update { it.copy(chat = it.chat.copy(isSyncing = false, errorMessage = "Could not refresh this session. Try refreshing again.")) }
             }
         }
     }
@@ -508,7 +670,7 @@ class RoxyAppViewModel(
             return
         }
 
-        if (parsed.pin?.length == 6) {
+        if (parsed.pin?.length == PAIRING_PIN_LENGTH) {
             _uiState.update { state ->
                 state.copy(
                     main = state.main.copy(
@@ -528,7 +690,7 @@ class RoxyAppViewModel(
                         isConnectingDialogVisible = true,
                         prefilledToken = parsed.token,
                         prefilledPin = "",
-                        qrFeedbackMessage = "QR code scanned! Enter the 6-digit PIN shown on your PC.",
+                        qrFeedbackMessage = "QR code scanned! Enter the $PAIRING_PIN_LENGTH-digit PIN shown on your PC.",
                         connectionError = null,
                     )
                 )
@@ -547,12 +709,48 @@ class RoxyAppViewModel(
     }
 
     fun connectRemote(tokenOrUrl: String, pin: String) {
+        val token = RemoteWorkspaceUtils.extractGuestToken(tokenOrUrl)
+        if (token.isBlank() || pin.trim().length != PAIRING_PIN_LENGTH) {
+            remoteClient.connect(tokenOrUrl, pin)
+            return
+        }
+        if (token != pairingToken) {
+            sessionCache.clear()
+            activeSessionId = null
+            snapshotsReceived.clear()
+            turnsReceived.clear()
+            _uiState.update { it.copy(
+                destination = RoxyDestination.Main,
+                main = it.main.copy(projects = emptyList()),
+                chat = initialUiState().chat,
+            ) }
+        }
+        pairingToken = token
         remoteClient.connect(tokenOrUrl, pin)
+    }
+
+    fun reconnectRemote() {
+        if (_uiState.value.chat.isConnecting) return
+        if (remoteClient.connectionState.value is RemoteConnectionState.Connected && activeSessionId != null) {
+            val sessionId = activeSessionId!!
+            beginSessionSync(sessionId)
+            remoteClient.switchSession(sessionId)
+            return
+        }
+        val token = storage.savedToken
+        val pin = storage.savedPin
+        if (token.isNullOrBlank() || pin.isNullOrBlank()) {
+            showMainScreen()
+            showConnectDialog()
+            return
+        }
+        connectRemote(token, pin)
     }
 
     fun disconnectRemote() {
         sessionCache.clear()
         activeSessionId = null
+        pairingToken = null
         storage.clear()
         remoteClient.disconnect()
         _uiState.update { state ->
@@ -571,13 +769,7 @@ class RoxyAppViewModel(
                     isConnecting = false,
                     connectionError = null,
                 ),
-                chat = state.chat.copy(
-                    sessionTitle = "",
-                    projectName = "",
-                    messages = emptyList(),
-                    toolCalls = emptyList(),
-                    isSyncing = false,
-                ),
+                chat = initialUiState().chat,
             )
         }
     }
@@ -602,8 +794,9 @@ class RoxyAppViewModel(
     }
 
     fun openSession(sessionId: String) {
+        if (_uiState.value.main.projects.none { project -> project.sessions.any { it.id == sessionId } }) return
         activeSessionId = sessionId
-        remoteClient.switchSession(sessionId)
+        beginSessionSync(sessionId)
 
         val cached = sessionCache[sessionId]
         val hasCache = cached != null && (cached.messages.isNotEmpty() || cached.toolCalls.isNotEmpty())
@@ -629,14 +822,21 @@ class RoxyAppViewModel(
                 chat = state.chat.copy(
                     sessionTitle = session.title,
                     projectName = project.name,
-                    composerText = "",
+                    composerText = cached?.draft ?: "",
+                    errorMessage = cached?.errorMessage,
                     messages = cached?.messages ?: emptyList(),
                     toolCalls = cached?.toolCalls ?: emptyList(),
                     isRunning = cached?.isRunning ?: false,
                     isSyncing = !hasCache,
+                    isSessionReady = false,
+                    queuedPromptCount = cached?.queuedPromptCount ?: 0,
+                    isAwaitingResponse = cached?.pendingPrompt != null,
+                    isMobileTurn = cached?.isMobileTurn ?: false,
+                    isStopping = cached?.isStopping ?: false,
                 ),
             )
         }
+        remoteClient.switchSession(sessionId)
     }
 
     fun showMainScreen() {
@@ -644,14 +844,27 @@ class RoxyAppViewModel(
     }
 
     fun updateComposer(text: String) {
+        activeSessionId?.let { sessionId ->
+            val cached = sessionCache[sessionId] ?: SessionChatCache()
+            sessionCache[sessionId] = cached.copy(draft = text)
+        }
         _uiState.update { state ->
             state.copy(chat = state.chat.copy(composerText = text))
         }
     }
 
     fun submitComposer() {
-        val currentText = _uiState.value.chat.composerText.trim()
-        if (currentText.isBlank()) return
+        val chat = _uiState.value.chat
+        val activeId = activeSessionId ?: return
+        if (!chat.canSubmit || remoteClient.connectionState.value !is RemoteConnectionState.Connected) return
+        val currentText = chat.composerText.trim()
+        if (!remoteClient.sendPrompt(currentText)) {
+            _uiState.update { it.copy(chat = it.chat.copy(
+                isSessionReady = false,
+                errorMessage = "Message was not sent. Your draft is saved. Refresh or reconnect before trying again.",
+            )) }
+            return
+        }
 
         val userMessage = ChatMessageUiModel(
             id = UUID.randomUUID().toString(),
@@ -659,27 +872,56 @@ class RoxyAppViewModel(
             isUser = true,
         )
 
-        val activeId = activeSessionId
-
         _uiState.update { state ->
             state.copy(
                 chat = state.chat.copy(
                     composerText = "",
-                    messages = state.chat.messages + userMessage,
-                    isRunning = true,
+                    isAwaitingResponse = true,
+                    errorMessage = null,
                 )
             )
         }
 
-        if (activeId != null) {
-            val cached = sessionCache[activeId] ?: SessionChatCache()
-            sessionCache[activeId] = cached.copy(
-                messages = cached.messages + userMessage,
-                isRunning = true,
-            )
+        val cached = sessionCache[activeId] ?: SessionChatCache()
+        sessionCache[activeId] = cached.copy(
+            pendingPrompt = userMessage,
+            draft = "",
+        )
+        responseTimeoutJobs[activeId] = scope.launch {
+            delay(operationTimeoutMs)
+            if (sessionCache[activeId]?.pendingPrompt?.id == userMessage.id) {
+                val message = "Your PC has not confirmed this message. Refresh the session before sending it again."
+                sessionCache[activeId] = sessionCache.getValue(activeId).copy(errorMessage = message)
+                if (activeSessionId == activeId) {
+                    _uiState.update { it.copy(chat = it.chat.copy(errorMessage = message, isSessionReady = false)) }
+                }
+            }
         }
+    }
 
-        remoteClient.sendPrompt(currentText)
+    fun stopTurn() {
+        val sessionId = activeSessionId ?: return
+        if (!_uiState.value.chat.canStop || remoteClient.connectionState.value !is RemoteConnectionState.Connected) return
+        if (!remoteClient.abort()) {
+            _uiState.update { it.copy(chat = it.chat.copy(
+                errorMessage = "Could not send Stop. Refresh the session to check its status.",
+                isSessionReady = false,
+            )) }
+            return
+        }
+        val cached = sessionCache[sessionId] ?: return
+        sessionCache[sessionId] = cached.copy(isStopping = true)
+        _uiState.update { it.copy(chat = it.chat.copy(isStopping = true)) }
+        stopTimeoutJobs[sessionId] = scope.launch {
+            delay(operationTimeoutMs)
+            if (sessionCache[sessionId]?.isStopping == true) {
+                val message = "Your PC has not confirmed Stop. Refresh the session to check its status."
+                sessionCache[sessionId] = sessionCache.getValue(sessionId).copy(isStopping = false, errorMessage = message)
+                if (activeSessionId == sessionId) {
+                    _uiState.update { it.copy(chat = it.chat.copy(isStopping = false, isSessionReady = false, errorMessage = message)) }
+                }
+            }
+        }
     }
 
     fun toggleToolCall(toolCallId: String) {
@@ -738,6 +980,8 @@ class RoxyAppViewModel(
     fun getInitialToken(): String = storage.savedToken ?: ""
     fun getInitialPin(): String = storage.savedPin ?: ""
 }
+
+private fun sourcePartIndex(partId: String): String = partId.substringAfterLast('-', "0")
 
 private fun initialUiState(): RoxyAppUiState {
     val computer = ComputerUiModel(

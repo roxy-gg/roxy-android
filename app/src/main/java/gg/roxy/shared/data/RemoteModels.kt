@@ -1,5 +1,7 @@
 package gg.roxy.shared.data
 
+import gg.roxy.shared.PAIRING_PIN_LENGTH
+
 sealed interface RemoteConnectionState {
     data object Disconnected : RemoteConnectionState
     data object Connecting : RemoteConnectionState
@@ -45,7 +47,7 @@ object RemoteWorkspaceUtils {
             if (token.isNotBlank()) {
                 return ParsedQrPairing(
                     token = token,
-                    pin = pin?.filter { it.isDigit() }?.take(6),
+                    pin = pin?.filter { it.isDigit() }?.take(PAIRING_PIN_LENGTH),
                     rawUrl = url ?: trimmed,
                 )
             }
@@ -115,7 +117,7 @@ object RemoteWorkspaceUtils {
         }
 
         val finalToken = extractedToken ?: trimmed
-        val cleanPin = extractedPin?.filter { it.isDigit() }?.take(6)
+        val cleanPin = extractedPin?.filter { it.isDigit() }?.take(PAIRING_PIN_LENGTH)
 
         return ParsedQrPairing(
             token = finalToken,

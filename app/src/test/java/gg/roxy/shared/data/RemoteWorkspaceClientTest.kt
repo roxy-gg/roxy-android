@@ -1,11 +1,15 @@
 package gg.roxy.shared.data
 
+import gg.roxy.chatFullscreen.businessLogic.ChatPartUiModel
 import gg.roxy.chatFullscreen.businessLogic.ToolCallStatus
 import gg.roxy.chatFullscreen.businessLogic.ToolCallType
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -25,6 +29,64 @@ class MemoryRemoteStorage : RemoteStorage {
 }
 
 class RemoteWorkspaceClientTest {
+
+    @Test
+    fun burstEventsKeepWireOrderEvenWhenTheConsumerIsSlow() = runBlocking {
+        val client = DefaultRemoteWorkspaceClient(MemoryRemoteStorage())
+        val received = mutableListOf<String>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) {
+            client.events.take(100).collect {
+                delay(1)
+                received.add((it as RemoteEvent.TextDelta).chunk)
+            }
+        }
+        repeat(100) { index ->
+            client.handleIncomingMessage("""{"t":"delta","sessionId":"s","event":{"type":"text","delta":"$index"}}""")
+        }
+        withTimeout(5000) { job.join() }
+        assertEquals((0 until 100).map { it.toString() }, received)
+    }
+
+    @Test
+    fun reasoningDeltaIsPublishedInsteadOfBeingDropped() = runBlocking {
+        val client = DefaultRemoteWorkspaceClient(MemoryRemoteStorage())
+
+        client.handleIncomingMessage(
+            """{"t":"delta","sessionId":"s","event":{"type":"reasoning","delta":"Thinking"}}"""
+        )
+
+        val event = withTimeout(2000) { client.events.first() }
+        assertEquals(RemoteEvent.ReasoningDelta("s", "Thinking"), event)
+    }
+
+    @Test
+    fun disconnectedGenerationDoesNotReplayItsTranscript() = runBlocking {
+        val client = DefaultRemoteWorkspaceClient(MemoryRemoteStorage())
+        client.handleIncomingMessage("""{"t":"snapshot","sessionId":"old","messages":[]}""")
+        withTimeout(2000) { client.events.first() }
+        client.disconnect()
+        client.handleIncomingMessage("""{"t":"snapshot","sessionId":"new","messages":[]}""")
+        val event = withTimeout(2000) { client.events.first() } as RemoteEvent.SnapshotReceived
+        assertEquals("new", event.sessionId)
+    }
+
+    @Test
+    fun hostOfflineRetiresTheConnection() {
+        val client = DefaultRemoteWorkspaceClient(MemoryRemoteStorage())
+        client.handleIncomingMessage("""{"t":"hello-ok"}""")
+        client.handleIncomingMessage("""{"t":"host-offline"}""")
+        assertTrue(client.connectionState.value is RemoteConnectionState.Error)
+        assertFalse(client.sendPrompt("Do not send"))
+    }
+
+    @Test
+    fun promptWithoutALiveSocketIsRejected() {
+        val client = DefaultRemoteWorkspaceClient(MemoryRemoteStorage())
+        assertFalse(client.sendPrompt("Hello"))
+        assertFalse(client.abort())
+        client.handleIncomingMessage("""{"t":"hello-ok"}""")
+        assertFalse(client.sendPrompt("Hello"))
+    }
 
     @Test
     fun snapshotWithTextAndToolPartsParsesBothCorrectly() = runBlocking {
@@ -233,6 +295,11 @@ class RemoteWorkspaceClientTest {
         assertTrue(event.isRunning)
         assertEquals("Run tests", event.userText)
         assertEquals("Starting tests now", event.inFlightText)
+        assertEquals(2, event.inFlightParts.size)
+        assertTrue(event.inFlightParts[0] is ChatPartUiModel.Tool)
+        val textPart = event.inFlightParts[1] as ChatPartUiModel.Text
+        assertEquals("turn-text-1", textPart.id)
+        assertEquals("Starting tests now", textPart.text)
         assertEquals(1, event.inFlightTools.size)
         assertEquals("call-live-1", event.inFlightTools[0].id)
         assertEquals(ToolCallStatus.Running, event.inFlightTools[0].status)

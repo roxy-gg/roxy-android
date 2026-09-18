@@ -65,4 +65,16 @@ data class ChatFullScreenUiState(
     val composerText: String = "",
     val isRunning: Boolean = false,
     val isSyncing: Boolean = false,
-)
+    val isConnected: Boolean = false,
+    val isConnecting: Boolean = false,
+    val errorMessage: String? = null,
+    val isSessionReady: Boolean = false,
+    val queuedPromptCount: Int = 0,
+    val isAwaitingResponse: Boolean = false,
+    val isMobileTurn: Boolean = false,
+    val isStopping: Boolean = false,
+) {
+    val canSubmit: Boolean get() = isConnected && isSessionReady && !isSyncing &&
+        !isRunning && !isAwaitingResponse && !isStopping && queuedPromptCount == 0 && composerText.isNotBlank()
+    val canStop: Boolean get() = isConnected && isSessionReady && isRunning && isMobileTurn && !isStopping
+}

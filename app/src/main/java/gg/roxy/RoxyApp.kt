@@ -25,6 +25,8 @@ fun RoxyApp(
     onDisconnectComputer: () -> Unit = {},
     initialToken: String = "",
     initialPin: String = "",
+    onReconnect: () -> Unit = {},
+    onStop: () -> Unit = {},
 ) {
     when (uiState.destination) {
         RoxyDestination.Main -> MainFullScreen(
@@ -43,6 +45,8 @@ fun RoxyApp(
         )
 
         RoxyDestination.Chat -> ChatFullScreen(
+            onReconnect = onReconnect,
+            onStop = onStop,
             uiState = uiState.chat,
             onBackClick = onBackFromChat,
             onComposerChange = onComposerChange,

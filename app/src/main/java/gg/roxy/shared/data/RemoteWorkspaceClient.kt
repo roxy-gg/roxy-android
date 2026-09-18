@@ -6,6 +6,7 @@ import gg.roxy.chatFullscreen.businessLogic.ChatPartUiModel
 import gg.roxy.chatFullscreen.businessLogic.ToolCallStatus
 import gg.roxy.chatFullscreen.businessLogic.ToolCallType
 import gg.roxy.chatFullscreen.businessLogic.ToolCallUiModel
+import gg.roxy.shared.PAIRING_PIN_LENGTH
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
@@ -14,11 +15,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
@@ -37,6 +40,7 @@ sealed interface RemoteEvent {
         val tools: List<ToolCallUiModel>,
     ) : RemoteEvent
     data class TextDelta(val sessionId: String, val chunk: String) : RemoteEvent
+    data class ReasoningDelta(val sessionId: String, val chunk: String) : RemoteEvent
     data class ToolStarted(val sessionId: String, val callId: String, val tool: String, val title: String) : RemoteEvent
     data class ToolDelta(val sessionId: String, val callId: String, val chunk: String) : RemoteEvent
     data class ToolEnded(val sessionId: String, val callId: String, val output: String, val ok: Boolean) : RemoteEvent
@@ -45,19 +49,22 @@ sealed interface RemoteEvent {
         val isRunning: Boolean,
         val userText: String? = null,
         val inFlightText: String? = null,
+        val inFlightParts: List<ChatPartUiModel> = emptyList(),
         val inFlightTools: List<ToolCallUiModel> = emptyList(),
     ) : RemoteEvent
     data class ErrorReceived(val message: String) : RemoteEvent
+    data class QueueChanged(val sessionId: String, val count: Int) : RemoteEvent
 }
 
 interface RemoteWorkspaceClient {
     val connectionState: StateFlow<RemoteConnectionState>
-    val events: SharedFlow<RemoteEvent>
+    val events: Flow<RemoteEvent>
     fun connect(rawTokenOrUrl: String, pin: String)
-    fun sendPrompt(text: String)
+    /** True means queued on the socket, not acknowledged by the host. */
+    fun sendPrompt(text: String): Boolean
     fun switchSession(sessionId: String)
     fun refreshSessions()
-    fun abort()
+    fun abort(): Boolean
     fun disconnect()
 }
 
@@ -89,8 +96,27 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
 
     // replay = 1 so a snapshot emitted before the ViewModel subscribes is still
     // delivered; without it the chat stays empty until the next remote event.
-    private val _events = MutableSharedFlow<RemoteEvent>(replay = 1, extraBufferCapacity = 64)
-    override val events: SharedFlow<RemoteEvent> = _events.asSharedFlow()
+    private data class QueuedEvent(val generation: Int, val event: RemoteEvent)
+    private val _events = MutableSharedFlow<QueuedEvent>(replay = 1, extraBufferCapacity = 64)
+    override val events: Flow<RemoteEvent> = _events
+        .filter { it.generation == connectionGeneration }
+        .map { it.event }
+    private val eventQueue = Channel<QueuedEvent>(capacity = 256)
+
+    init {
+        scope.launch {
+            for (queued in eventQueue) {
+                if (queued.generation == connectionGeneration) _events.emit(queued)
+            }
+        }
+    }
+
+    private fun publish(event: RemoteEvent) {
+        val generation = connectionGeneration
+        if (!eventQueue.trySend(QueuedEvent(generation, event)).isSuccess) {
+            failConnection("Could not keep up with PC updates. Reconnect to refresh the conversation.", generation)
+        }
+    }
 
     override fun connect(rawTokenOrUrl: String, pin: String) {
         val token = RemoteWorkspaceUtils.extractGuestToken(rawTokenOrUrl)
@@ -100,7 +126,7 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
         }
 
         val cleanedPin = pin.trim()
-        if (cleanedPin.length != 6) {
+        if (cleanedPin.length != PAIRING_PIN_LENGTH) {
             _connectionState.value = RemoteConnectionState.Error("PIN must be 6 digits")
             return
         }
@@ -243,9 +269,7 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
                         )
                     )
                 }
-                scope.launch {
-                    _events.emit(RemoteEvent.SessionsReceived(list, currentId))
-                }
+                publish(RemoteEvent.SessionsReceived(list, currentId))
             }
             "snapshot" -> {
                 val sessionId = json.optString("sessionId", "")
@@ -336,9 +360,7 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
                     }
                 }
 
-                scope.launch {
-                    _events.emit(RemoteEvent.SnapshotReceived(sessionId, messagesList, toolsList))
-                }
+                publish(RemoteEvent.SnapshotReceived(sessionId, messagesList, toolsList))
             }
             "delta" -> {
                 val sessionId = json.optString("sessionId", "")
@@ -347,33 +369,31 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
                     "text" -> {
                         val delta = eventObj.optString("delta", "")
                         if (delta.isNotEmpty()) {
-                            scope.launch {
-                                _events.emit(RemoteEvent.TextDelta(sessionId, delta))
-                            }
+                            publish(RemoteEvent.TextDelta(sessionId, delta))
+                        }
+                    }
+                    "reasoning" -> {
+                        val delta = eventObj.optString("delta", "")
+                        if (delta.isNotEmpty()) {
+                            publish(RemoteEvent.ReasoningDelta(sessionId, delta))
                         }
                     }
                     "tool-start" -> {
                         val callId = eventObj.optString("callId", UUID.randomUUID().toString())
                         val tool = eventObj.optString("tool", "tool")
                         val title = eventObj.optString("title", tool)
-                        scope.launch {
-                            _events.emit(RemoteEvent.ToolStarted(sessionId, callId, tool, title))
-                        }
+                        publish(RemoteEvent.ToolStarted(sessionId, callId, tool, title))
                     }
                     "tool-delta" -> {
                         val callId = eventObj.optString("callId", "")
                         val chunk = eventObj.optString("chunk", "")
-                        scope.launch {
-                            _events.emit(RemoteEvent.ToolDelta(sessionId, callId, chunk))
-                        }
+                        publish(RemoteEvent.ToolDelta(sessionId, callId, chunk))
                     }
                     "tool-end" -> {
                         val callId = eventObj.optString("callId", "")
                         val output = eventObj.optString("output", "")
                         val ok = eventObj.optBoolean("ok", true)
-                        scope.launch {
-                            _events.emit(RemoteEvent.ToolEnded(sessionId, callId, output, ok))
-                        }
+                        publish(RemoteEvent.ToolEnded(sessionId, callId, output, ok))
                     }
                 }
             }
@@ -383,21 +403,27 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
                 val userText = json.optString("userText").takeIf { it.isNotBlank() }
                 val isRunning = state == "running"
 
+                val inFlightParts = mutableListOf<ChatPartUiModel>()
                 val inFlightTools = mutableListOf<ToolCallUiModel>()
-                var inFlightText: String? = null
+                val textParts = mutableListOf<String>()
                 val partsArray = json.optJSONArray("parts")
                 if (partsArray != null && partsArray.length() > 0) {
-                    val textParts = mutableListOf<String>()
                     for (p in 0 until partsArray.length()) {
                         val partObj = partsArray.optJSONObject(p) ?: continue
                         when (partObj.optString("type")) {
                             "text" -> {
-                                val t = partObj.optString("text", "")
-                                if (t.isNotBlank()) textParts.add(t)
+                                val textPart = partObj.optString("text", "")
+                                if (textPart.isNotBlank()) {
+                                    inFlightParts.add(ChatPartUiModel.Text(id = "turn-text-$p", text = textPart))
+                                    textParts.add(textPart)
+                                }
                             }
                             "reasoning" -> {
-                                val r = partObj.optString("text", "")
-                                if (r.isNotBlank()) textParts.add(r)
+                                val reasoningText = partObj.optString("text", "")
+                                if (reasoningText.isNotBlank()) {
+                                    inFlightParts.add(ChatPartUiModel.Reasoning(id = "turn-reasoning-$p", text = reasoningText))
+                                    textParts.add(reasoningText)
+                                }
                             }
                             "tool" -> {
                                 val toolName = partObj.optString("tool", "tool")
@@ -406,43 +432,48 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
                                 val toolOutput = partObj.optString("output", "")
                                 val callId = partObj.optString("callId", UUID.randomUUID().toString())
                                 val toolType = resolveToolType(toolName)
-                                inFlightTools.add(
-                                    ToolCallUiModel(
-                                        id = callId,
-                                        type = toolType,
-                                        name = toolName,
-                                        title = toolTitle,
-                                        detail = toolOutput,
-                                        status = if (toolState == "done") ToolCallStatus.Complete else ToolCallStatus.Running,
-                                        isExpanded = false,
-                                    )
+                                val toolModel = ToolCallUiModel(
+                                    id = callId,
+                                    type = toolType,
+                                    name = toolName,
+                                    title = toolTitle,
+                                    detail = toolOutput,
+                                    status = if (toolState == "done") ToolCallStatus.Complete else ToolCallStatus.Running,
+                                    isExpanded = false,
                                 )
+                                inFlightParts.add(ChatPartUiModel.Tool(toolModel))
+                                inFlightTools.add(toolModel)
                             }
                         }
                     }
-                    if (textParts.isNotEmpty()) {
-                        inFlightText = textParts.joinToString("\n\n")
-                    }
                 }
 
-                scope.launch {
-                    _events.emit(RemoteEvent.TurnChanged(sessionId, isRunning, userText, inFlightText, inFlightTools))
-                }
+                publish(
+                    RemoteEvent.TurnChanged(
+                        sessionId = sessionId,
+                        isRunning = isRunning,
+                        userText = userText,
+                        inFlightText = textParts.takeIf { it.isNotEmpty() }?.joinToString("\n\n"),
+                        inFlightParts = inFlightParts,
+                        inFlightTools = inFlightTools,
+                    )
+                )
             }
             "error" -> {
                 val msg = json.optString("message", "Unknown error from remote host")
                 if (!isHandshakeComplete) {
                     failConnection(msg, connectionGeneration)
                 } else {
-                    scope.launch {
-                        _events.emit(RemoteEvent.ErrorReceived(msg))
-                    }
+                    publish(RemoteEvent.ErrorReceived(msg))
                 }
             }
+            "queue" -> publish(RemoteEvent.QueueChanged(
+                sessionId = json.optString("sessionId", ""),
+                count = json.optJSONArray("items")?.length() ?: 0,
+            ))
+            "host-offline" -> failConnection("Your PC went offline. Reconnect when Roxy is available again.", connectionGeneration)
             "bye" -> {
-                handshakeTimeoutJob?.cancel()
-                isHandshakeComplete = false
-                _connectionState.value = RemoteConnectionState.Disconnected
+                disconnect()
             }
         }
     }
@@ -456,13 +487,17 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
         }
     }
 
-    override fun sendPrompt(text: String) {
-        val ws = activeWebSocket ?: return
+    override fun sendPrompt(text: String): Boolean {
+        val generation = connectionGeneration
+        val ws = activeWebSocket ?: return false
+        if (!isHandshakeComplete || text.isBlank()) return false
         val payload = JSONObject().apply {
             put("t", "prompt")
             put("text", text)
         }
-        ws.send(payload.toString())
+        if (ws.send(payload.toString())) return true
+        failConnection("Could not send your message. Reconnect to your PC.", generation)
+        return false
     }
 
     override fun switchSession(sessionId: String) {
@@ -501,12 +536,13 @@ class DefaultRemoteWorkspaceClient @Inject constructor(
         ws.send(payload.toString())
     }
 
-    override fun abort() {
-        val ws = activeWebSocket ?: return
+    override fun abort(): Boolean {
+        val ws = activeWebSocket ?: return false
+        if (!isHandshakeComplete) return false
         val payload = JSONObject().apply {
             put("t", "abort")
         }
-        ws.send(payload.toString())
+        return ws.send(payload.toString())
     }
 
     override fun disconnect() {

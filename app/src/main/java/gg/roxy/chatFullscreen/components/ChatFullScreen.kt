@@ -18,11 +18,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -31,9 +34,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.snapshotFlow
-import androidx.compose.runtime.withFrameNanos
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -43,13 +51,89 @@ import androidx.compose.ui.unit.dp
 import gg.roxy.chatFullscreen.businessLogic.ChatFullScreenUiState
 import gg.roxy.chatFullscreen.businessLogic.ChatMessageUiModel
 import gg.roxy.chatFullscreen.businessLogic.ChatPartUiModel
-import gg.roxy.chatFullscreen.businessLogic.ToolCallStatus
-import gg.roxy.chatFullscreen.businessLogic.ToolCallType
 import gg.roxy.chatFullscreen.businessLogic.ToolCallUiModel
 import gg.roxy.shared.styles.RoxyTheme
 import gg.roxy.shared.styles.roxyColors
-import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.first
+
+/**
+ * One entry of the transcript. Messages are flattened into rows up front so the
+ * list has a single, stable index space: the newest row is always index 0, which
+ * is what pins the viewport to the bottom of the conversation.
+ */
+@Immutable
+internal sealed interface ChatRow {
+    val key: String
+
+    @Immutable
+    data class UserMessage(override val key: String, val text: String) : ChatRow
+
+    @Immutable
+    data class Markdown(override val key: String, val text: String) : ChatRow
+
+    @Immutable
+    data class Reasoning(val part: ChatPartUiModel.Reasoning) : ChatRow {
+        override val key: String get() = part.id
+    }
+
+    @Immutable
+    data class Tool(val tool: ToolCallUiModel) : ChatRow {
+        override val key: String get() = tool.id
+    }
+
+    @Immutable
+    data class OrphanTools(val tools: List<ToolCallUiModel>) : ChatRow {
+        override val key: String get() = "orphan-tool-calls"
+    }
+}
+
+/**
+ * Flattens the transcript into newest-first order, ready for [LazyColumn]'s `reverseLayout`.
+ *
+ * This is rebuilt when streaming changes the messages list. That is still kept in the UI layer:
+ * these rows are list presentation state, and moving the same O(n) walk into the ViewModel would
+ * couple business state to composable row shapes without reducing the work. Stable keys and value
+ * equality keep unchanged rows from recomposing; if this ever profiles as allocation pressure, the
+ * right fix is an incremental row cache keyed by message/part ids here.
+ */
+internal fun buildChatRows(
+    messages: List<ChatMessageUiModel>,
+    toolCalls: List<ToolCallUiModel>,
+): List<ChatRow> {
+    val rows = mutableListOf<ChatRow>()
+    val renderedToolIds = if (toolCalls.isEmpty()) null else mutableSetOf<String>()
+
+    messages.forEach { message ->
+        when {
+            message.isUser -> rows += ChatRow.UserMessage(message.id, message.text)
+            // Assistant turn: walk parts in chronological order, exactly like desktop.
+            message.parts.isNotEmpty() -> message.parts.forEach { part ->
+                rows += when (part) {
+                    is ChatPartUiModel.Text -> ChatRow.Markdown(part.id, part.text)
+                    is ChatPartUiModel.Reasoning -> ChatRow.Reasoning(part)
+                    is ChatPartUiModel.Tool -> {
+                        renderedToolIds?.add(part.tool.id)
+                        ChatRow.Tool(part.tool)
+                    }
+                }
+            }
+            message.text.isNotBlank() -> rows += ChatRow.Markdown(message.id, message.text)
+        }
+    }
+
+    // Fallback for tools not associated with an existing message part. They have
+    // no chronological anchor, so they sit at the oldest end of the transcript.
+    // Appending them would instead make them permanently the newest row, and
+    // because their key is constant the newest key would never change again: an
+    // incoming message would not trigger the pin, and sending would scroll to
+    // the tool pile rather than the sent message.
+    renderedToolIds?.let { ids ->
+        val orphanTools = toolCalls.filterNot { it.id in ids }
+        if (orphanTools.isNotEmpty()) rows.add(0, ChatRow.OrphanTools(orphanTools))
+    }
+
+    rows.reverse()
+    return rows
+}
 
 @Composable
 fun ChatFullScreen(
@@ -59,9 +143,52 @@ fun ChatFullScreen(
     onComposerSubmit: () -> Unit,
     onToolCallClick: (String) -> Unit,
     modifier: Modifier = Modifier,
+    onReconnect: () -> Unit = {},
+    onStop: () -> Unit = {},
 ) {
     val colors = MaterialTheme.roxyColors
     BackHandler(onBack = onBackClick)
+
+    val rows = remember(uiState.messages, uiState.toolCalls) {
+        buildChatRows(uiState.messages, uiState.toolCalls)
+    }
+    val isSessionEmpty = uiState.messages.isEmpty() && uiState.toolCalls.isEmpty()
+
+    val listState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
+
+    // The list is reversed, so the anchor item is the newest row. A small
+    // threshold still counts as "at the bottom": a one-pixel offset after a fling
+    // or nested scroll should not disable the chat's follow-tail behaviour.
+    val isNearNewestRow by remember(listState) {
+        derivedStateOf {
+            val viewportHeight = listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset
+            val followThreshold = (viewportHeight / 4).coerceAtLeast(1)
+            listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset < followThreshold
+        }
+    }
+    var hasUnseenNewestRow by rememberSaveable { mutableStateOf(false) }
+
+    // Growing the newest row needs no scrolling at all -- it is the anchor, so
+    // streamed markdown and tool output expand upwards while the bottom edge
+    // stays put. Only an insertion has to be handled: rows carry stable keys, so
+    // the anchor would otherwise follow the previously newest row and leave the
+    // incoming one laid out below the viewport.
+    val newestRowKey = rows.firstOrNull { it !is ChatRow.OrphanTools }?.key
+    LaunchedEffect(newestRowKey) {
+        // Effects run before this frame's measure pass, so isNearNewestRow still
+        // describes the layout as it was before the row arrived: a user who had
+        // scrolled up into history is left alone and gets an explicit affordance
+        // instead of a forced jump.
+        if (isNearNewestRow) {
+            listState.requestScrollToItem(0)
+            hasUnseenNewestRow = false
+        } else if (newestRowKey != null) {
+            hasUnseenNewestRow = true
+        }
+    }
+    LaunchedEffect(isNearNewestRow) {
+        if (isNearNewestRow) hasUnseenNewestRow = false
+    }
 
     Column(
         modifier = modifier
@@ -74,193 +201,125 @@ fun ChatFullScreen(
             sessionTitle = uiState.sessionTitle,
             projectName = uiState.projectName,
             isRunning = uiState.isRunning,
+            isStopping = uiState.isStopping,
             isSyncing = uiState.isSyncing,
             onBackClick = onBackClick,
         )
         HorizontalDivider(color = colors.border)
+        ChatStatusBanner(uiState, onReconnect)
 
-        val listState = rememberLazyListState()
-
-        // Opening a session must always land at the bottom. Keyed on the session
-        // rather than on the message list, because a snapshot that arrives after
-        // the cached content is structurally equal and would not retrigger it.
-        LaunchedEffect(uiState.sessionTitle, uiState.projectName) {
-            // Content streams in over several layout passes (markdown and code
-            // blocks resize once measured), so keep re-pinning until the total
-            // extent stops moving instead of scrolling on the first pass only.
-            snapshotFlow { listState.layoutInfo.totalItemsCount }
-                .filter { it > 0 }
-                .first()
-
-            var previous: Pair<Int, Int>? = null
-            repeat(MAX_SETTLE_FRAMES) {
-                val info = listState.layoutInfo
-                listState.scrollToItem(info.totalItemsCount - 1, scrollOffset = Int.MAX_VALUE)
-
-                val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()
-                val current = listState.layoutInfo.totalItemsCount to
-                    ((last?.offset ?: 0) + (last?.size ?: 0))
-                if (current == previous) return@LaunchedEffect
-                previous = current
-                withFrameNanos { }
-            }
-        }
-
-        // While streaming, follow the tail only if the user has not scrolled away.
-        LaunchedEffect(uiState.messages, uiState.toolCalls) {
-            // Read before suspending: layoutInfo still describes the pre-update
-            // layout, so this answers "was the user pinned to the bottom before
-            // this change?". Reading it after the new content is laid out would
-            // always report false and disable autoscroll entirely.
-            if (listState.canScrollForward) return@LaunchedEffect
-
-            val itemCount = snapshotFlow { listState.layoutInfo.totalItemsCount }
-                .filter { it > 0 }
-                .first()
-            // Large offset lands at the bottom of the last item even when it is
-            // taller than the viewport.
-            listState.scrollToItem(itemCount - 1, scrollOffset = Int.MAX_VALUE)
-        }
-
-        LazyColumn(
-            state = listState,
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth(),
-            contentPadding = PaddingValues(start = 20.dp, top = 28.dp, end = 20.dp, bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            if (uiState.isSyncing && uiState.messages.isEmpty() && uiState.toolCalls.isEmpty()) {
-                item(key = "syncing-indicator") {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 48.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(12.dp),
-                        ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(28.dp),
-                                color = colors.accent,
-                                strokeWidth = 2.5.dp,
-                            )
-                            Text(
-                                text = "Syncing with desktop...",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = colors.textMuted,
-                            )
-                        }
-                    }
-                }
-            } else if (uiState.messages.isEmpty() && uiState.toolCalls.isEmpty()) {
-                item(key = "empty-session") {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 48.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            text = "No messages yet. Send a prompt to get started.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = colors.textMuted,
+        if (isSessionEmpty) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    if (uiState.isSyncing) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(28.dp),
+                            color = colors.accent,
+                            strokeWidth = 2.5.dp,
                         )
                     }
+                    Text(
+                        text = if (uiState.isSyncing) {
+                            "Syncing with desktop..."
+                        } else {
+                            "No messages yet. Send a prompt to get started."
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.textMuted,
+                    )
                 }
-            } else {
-                uiState.messages.forEach { message ->
-                    if (message.isUser) {
-                        item(key = message.id) {
-                            Box(
-                                modifier = Modifier
-                                    .widthIn(max = 720.dp)
-                                    .fillMaxWidth(),
-                                contentAlignment = Alignment.CenterEnd,
+            }
+        } else {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+            ) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    // Paints row 0 against the bottom edge and anchors scrolling
+                    // there, which is what keeps the newest content on screen.
+                    reverseLayout = true,
+                    contentPadding = PaddingValues(start = 20.dp, top = 28.dp, end = 20.dp, bottom = 24.dp),
+                    // Alignment.Bottom parks a transcript shorter than the viewport
+                    // on the composer rather than under the header.
+                    verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.Bottom),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    items(rows, key = { it.key }, contentType = { it::class }) { row ->
+                        val rowModifier = Modifier
+                            .widthIn(max = 720.dp)
+                            .fillMaxWidth()
+                        when (row) {
+                        is ChatRow.UserMessage -> Box(
+                            modifier = rowModifier,
+                            contentAlignment = Alignment.CenterEnd,
+                        ) {
+                            Surface(
+                                shape = MaterialTheme.shapes.large,
+                                color = colors.surface2,
+                                border = BorderStroke(1.dp, colors.edge),
                             ) {
-                                Surface(
-                                    shape = MaterialTheme.shapes.large,
-                                    color = colors.surface2,
-                                    border = BorderStroke(1.dp, colors.edge),
-                                ) {
-                                    Text(
-                                        text = message.text,
-                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        color = colors.text,
-                                    )
-                                }
-                            }
-                        }
-                    } else {
-                        // Assistant message: walk parts in chronological order, exactly like desktop
-                        if (message.parts.isNotEmpty()) {
-                            message.parts.forEach { part ->
-                                when (part) {
-                                    is ChatPartUiModel.Text -> {
-                                        item(key = part.id) {
-                                            MarkdownText(
-                                                markdown = part.text,
-                                                modifier = Modifier
-                                                    .widthIn(max = 720.dp)
-                                                    .fillMaxWidth(),
-                                            )
-                                        }
-                                    }
-                                    is ChatPartUiModel.Reasoning -> {
-                                        item(key = part.id) {
-                                            ReasoningCard(
-                                                reasoning = part,
-                                                modifier = Modifier
-                                                    .widthIn(max = 720.dp)
-                                                    .fillMaxWidth(),
-                                            )
-                                        }
-                                    }
-                                    is ChatPartUiModel.Tool -> {
-                                        item(key = part.id) {
-                                            ToolCallCard(
-                                                toolCall = part.tool,
-                                                onClick = { onToolCallClick(part.tool.id) },
-                                                modifier = Modifier
-                                                    .widthIn(max = 720.dp)
-                                                    .fillMaxWidth(),
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        } else if (message.text.isNotBlank()) {
-                            item(key = message.id) {
-                                MarkdownText(
-                                    markdown = message.text,
-                                    modifier = Modifier
-                                        .widthIn(max = 720.dp)
-                                        .fillMaxWidth(),
+                                Text(
+                                    text = row.text,
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = colors.text,
                                 )
                             }
                         }
-                    }
-                }
 
-                // Fallback for tools not associated with an existing message part
-                val inPartsToolIds = uiState.messages.flatMap { it.parts }.filterIsInstance<ChatPartUiModel.Tool>().map { it.tool.id }.toSet()
-                val orphanTools = uiState.toolCalls.filterNot { it.id in inPartsToolIds }
-                if (orphanTools.isNotEmpty()) {
-                    item(key = "orphan-tool-calls") {
-                        ToolCallStack(
-                            toolCalls = orphanTools,
+                        is ChatRow.Markdown -> MarkdownText(
+                            markdown = row.text,
+                            modifier = rowModifier,
+                        )
+
+                        is ChatRow.Reasoning -> ReasoningCard(
+                            reasoning = row.part,
+                            modifier = rowModifier,
+                        )
+
+                        is ChatRow.Tool -> ToolCallCard(
+                            toolCall = row.tool,
+                            onClick = { onToolCallClick(row.tool.id) },
+                            modifier = rowModifier,
+                        )
+
+                        is ChatRow.OrphanTools -> ToolCallStack(
+                            toolCalls = row.tools,
                             onToolCallClick = onToolCallClick,
-                            modifier = Modifier
-                                .widthIn(max = 720.dp)
-                                .fillMaxWidth(),
+                            modifier = rowModifier,
                         )
                     }
                 }
             }
+            if (hasUnseenNewestRow && !isNearNewestRow) {
+                Button(
+                    onClick = {
+                        listState.requestScrollToItem(0)
+                        hasUnseenNewestRow = false
+                    },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 16.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = colors.accent,
+                        contentColor = colors.bg,
+                    ),
+                ) {
+                    Text("Latest")
+                }
+            }
+        }
         }
 
         Box(
@@ -272,8 +331,21 @@ fun ChatFullScreen(
         ) {
             ChatComposer(
                 text = uiState.composerText,
+                canSubmit = uiState.canSubmit,
+                showStop = uiState.isRunning && uiState.isMobileTurn,
+                canStop = uiState.canStop,
+                isStopping = uiState.isStopping,
+                onStop = onStop,
                 onTextChange = onComposerChange,
-                onSubmit = onComposerSubmit,
+                onSubmit = {
+                    onComposerSubmit()
+                    // User-sent messages are explicit navigation to the live
+                    // edge, even if the user was reading history. This is the
+                    // only forced jump; incoming messages use the follow-tail
+                    // policy above.
+                    listState.requestScrollToItem(0)
+                    hasUnseenNewestRow = false
+                },
                 modifier = Modifier.widthIn(max = 720.dp),
             )
         }
@@ -285,6 +357,7 @@ fun ChatHeader(
     sessionTitle: String,
     projectName: String,
     isRunning: Boolean = false,
+    isStopping: Boolean = false,
     isSyncing: Boolean = false,
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -340,7 +413,7 @@ fun ChatHeader(
             )
             Spacer(Modifier.width(8.dp))
             Text(
-                text = "Thinking...",
+                text = if (isStopping) "Stopping..." else "Thinking...",
                 style = MaterialTheme.typography.labelSmall,
                 color = colors.accent,
             )
@@ -366,9 +439,6 @@ fun ChatHeader(
         }
     }
 }
-
-/** Upper bound on layout passes waited for when pinning a freshly opened chat. */
-private const val MAX_SETTLE_FRAMES = 10
 
 private val ChatPreviewState = ChatFullScreenUiState(
     sessionTitle = "Remote Session",

@@ -4,6 +4,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -17,7 +18,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Computer
-import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material3.Button
@@ -32,19 +32,23 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import gg.roxy.shared.PAIRING_PIN_LENGTH
+import gg.roxy.shared.components.PinInput
 import gg.roxy.shared.styles.RoxyMonoFontFamily
 import gg.roxy.shared.styles.roxyColors
 
@@ -64,8 +68,22 @@ fun ConnectComputerDialog(
     var tokenInput by remember(initialTokenOrUrl) { mutableStateOf(initialTokenOrUrl) }
     var pinInput by remember(initialPin) { mutableStateOf(initialPin) }
     val keyboardController = LocalSoftwareKeyboardController.current
+    val pinFocusRequester = remember { FocusRequester() }
 
-    val canConnect = tokenInput.isNotBlank() && pinInput.trim().length == 6 && !isConnecting
+    // connectionError is a single field shared with QR scanning, so it also
+    // carries failures that say nothing about the PIN. Stop marking the cells
+    // once the PIN is edited: the banner still shows the message, but the
+    // cells stop claiming the digits are at fault.
+    var pinEditedSinceError by remember(errorMessage) { mutableStateOf(false) }
+    val isPinError = errorMessage != null && !pinEditedSinceError
+
+    val canConnect = tokenInput.isNotBlank() && pinInput.trim().length == PAIRING_PIN_LENGTH && !isConnecting
+
+    LaunchedEffect(initialTokenOrUrl, initialPin) {
+        if (initialTokenOrUrl.isNotBlank() && initialPin.length < PAIRING_PIN_LENGTH) {
+            pinFocusRequester.requestFocus()
+        }
+    }
 
     Dialog(onDismissRequest = onDismiss) {
         Surface(
@@ -229,13 +247,14 @@ fun ConnectComputerDialog(
                             unfocusedTextColor = colors.text,
                         ),
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                        keyboardActions = KeyboardActions(onNext = { pinFocusRequester.requestFocus() }),
                     )
                 }
 
                 // Input: PIN
                 Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     Text(
-                        text = "6-DIGIT PIN",
+                        text = "$PAIRING_PIN_LENGTH-DIGIT PIN",
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontFamily = RoxyMonoFontFamily,
                             letterSpacing = 1.1.sp,
@@ -243,39 +262,17 @@ fun ConnectComputerDialog(
                         ),
                         color = colors.textSubtle,
                     )
-                    OutlinedTextField(
+                    PinInput(
                         value = pinInput,
-                        onValueChange = { if (it.length <= 6) pinInput = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        placeholder = {
-                            Text(
-                                "e.g. 123456",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = colors.textSubtle,
-                            )
+                        onValueChange = {
+                            pinInput = it
+                            pinEditedSinceError = true
                         },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Rounded.Key,
-                                contentDescription = null,
-                                tint = colors.textMuted,
-                                modifier = Modifier.size(18.dp),
-                            )
-                        },
-                        singleLine = true,
-                        shape = RoundedCornerShape(12.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = colors.edgeStrong,
-                            unfocusedBorderColor = colors.edge,
-                            focusedContainerColor = colors.surface2,
-                            unfocusedContainerColor = colors.surface2,
-                            focusedTextColor = colors.text,
-                            unfocusedTextColor = colors.text,
-                        ),
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Number,
-                            imeAction = ImeAction.Done,
-                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusRequester(pinFocusRequester),
+                        enabled = !isConnecting,
+                        isError = isPinError,
                         keyboardActions = KeyboardActions(
                             onDone = {
                                 keyboardController?.hide()
@@ -329,6 +326,7 @@ fun ConnectComputerDialog(
                         enabled = canConnect,
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = colors.accent,
                             contentColor = colors.bg,
@@ -338,14 +336,14 @@ fun ConnectComputerDialog(
                     ) {
                         if (isConnecting) {
                             CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
+                                modifier = Modifier.size(14.dp),
                                 strokeWidth = 2.dp,
-                                color = colors.bg,
+                                color = colors.textSubtle,
                             )
                             Spacer(Modifier.width(8.dp))
-                            Text("Connecting...")
+                            Text("Connecting", maxLines = 1)
                         } else {
-                            Text("Connect")
+                            Text("Connect", maxLines = 1)
                         }
                     }
                 }
